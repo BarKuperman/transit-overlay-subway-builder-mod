@@ -1,8 +1,0 @@
-{
-    "id": "com.barku.real-transit-overlay",
-    "name": "Real Transit Overlay",
-    "description": "Overlays real-world railway and subway lines from OpenRailwayMap. Toggle in Settings.",
-    "version": "0.1.0",
-    "author": { "name": "barku" },
-    "main": "index.js"
-}
