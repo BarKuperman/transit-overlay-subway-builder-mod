@@ -1,6 +1,6 @@
 {
-    "id": "com.barku.real-transit-overlay",
-    "name": "Real Transit Overlay",
+    "id": "com.barku.transit-overlay",
+    "name": "Transit Overlay",
     "description": "Overlays real-world railway and subway lines from Open Street Map",
     "version": "1.0.0",
     "author": {

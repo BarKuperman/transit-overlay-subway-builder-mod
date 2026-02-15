@@ -7,11 +7,12 @@ This mod adds real-world transit data as an interactive overlay to **Subway Buil
 ## 🚀 Installation
 
 1.  **Extract the Files**: Place the entire folder into your game's `mods` directory.
-2.  **Enable in Mod Manager**:
+2.  **Extract the Files**: Change the folder name to exactly **Transit Overlay**.
+3.  **Enable in Mod Manager**:
     * Launch the game and open the **Mod Manager**.
-    * Locate **Real Transit Overlay** and toggle it to **ON**.
+    * Locate **Transit Overlay** and toggle it to **ON**.
     * Click **Reload Mods**.
-3.  **Required Restart**: Close the game completely after activating the mod for the first time.
+4.  **Required Restart**: Close the game completely after activating the mod for the first time.
 
 ---
 
@@ -37,7 +38,7 @@ Once inside a map, a new **Transit Overlay** button will appear in your bottom b
 ---
 
 ## 🌍 Included Data
-The mod currently includes high-fidelity transit data for the following cities:
+The mod currently includes transit data for the following cities:
 * **Toronto** (`tor.geojson`)
 * **Paris** (`par.geojson`)
 * **New York City** (`nyc.geojson`)

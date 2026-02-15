@@ -191,7 +191,7 @@ async function updateCityData(map, manualCityCode = null) {
         modsDir = modsDir.replaceAll('\\', '/'); 
         
         const fileName = `${cityCode.toLowerCase()}.geojson`;
-        const localFileUrl = `file:///${modsDir}/Transit Overlay_0.1/data/${fileName}`;
+        const localFileUrl = `file:///${modsDir}/Transit Overlay/data/${fileName}`;
         
         const response = await fetch(localFileUrl);
         
