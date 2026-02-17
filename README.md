@@ -7,7 +7,7 @@ This mod adds real-world transit data as an interactive overlay to **Subway Buil
 ## 🚀 Installation
 
 1.  **Extract the Files**: Place the entire folder into your game's `mods` directory.
-2.  **Extract the Files**: Change the folder name to exactly **Transit Overlay**.
+2.  **Rename the mod folder**: Change the folder name to exactly **"Transit Overlay"**
 3.  **Enable in Mod Manager**:
     * Launch the game and open the **Mod Manager**.
     * Locate **Transit Overlay** and toggle it to **ON**.
