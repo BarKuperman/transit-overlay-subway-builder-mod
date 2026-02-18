@@ -45,3 +45,4 @@ The mod currently includes transit data for the following cities:
 * **London** (`lon.geojson`)
 * **Tel Aviv** (`tlv.geojson`)
 * **Seattle** (`sea.geojson`)
+* **Chicago** (`chi.geojson`)
