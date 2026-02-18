@@ -1,0 +1,4 @@
+.vscode/
+dev_scripts/
+*-raw-osm.json
+*.py

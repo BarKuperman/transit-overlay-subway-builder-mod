@@ -1,5 +1,7 @@
 const api = window.SubwayBuilderAPI;
 
+const getUniqueNetworkId = (type, net) => `${type}__${net}`;
+
 const naturalSort = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare;
 
 const LAYER_ID_LINES = 'real-transit-lines';
@@ -13,6 +15,7 @@ window.RealTransitState = {
     activeNetworks: [],
     activeLines: [],      
     hierarchy: {}, 
+    lineNames: {}, // Stores display names for unique IDs
     currentCity: null, 
     cache: {} 
 };
@@ -46,7 +49,7 @@ api.hooks.onGameInit(() => {
         for (const type in hierarchy) {
             for (const net in hierarchy[type]) {
                 const isTypeActive = s.activeTypes.includes(type);
-                const isNetActive = s.activeNetworks.includes(net);
+                const isNetActive = s.activeNetworks.includes(getUniqueNetworkId(type, net));
                 
                 hierarchy[type][net].forEach(l => {
                     allUniqueLines.add(`${type}-${net}-${l}`);
@@ -81,7 +84,7 @@ api.hooks.onGameInit(() => {
                 
                 for (const t in hierarchy) {
                     for (const n in hierarchy[t]) {
-                        allNets.add(n);
+                        allNets.add(getUniqueNetworkId(t, n));
                         hierarchy[t][n].forEach(l => allLines.add(l));
                     }
                 }
@@ -134,13 +137,14 @@ api.hooks.onGameInit(() => {
         };
 
         const toggleNetworkVisibility = (net, parentType) => {
+            const uniqueId = getUniqueNetworkId(parentType, net);
             let active = [...s.activeNetworks];
             let turningOn = false;
             
-            if (active.includes(net)) {
-                active = active.filter(n => n !== net);
+            if (active.includes(uniqueId)) {
+                active = active.filter(n => n !== uniqueId);
             } else {
-                active.push(net);
+                active.push(uniqueId);
                 turningOn = true;
             }
             s.activeNetworks = active;
@@ -172,8 +176,9 @@ api.hooks.onGameInit(() => {
             localStorage.setItem(`rt_active_lines_${s.currentCity}`, JSON.stringify(active));
             
             if (turningOn) {
-                if (!s.activeNetworks.includes(parentNet)) {
-                    s.activeNetworks.push(parentNet);
+                const uniqueNetId = getUniqueNetworkId(parentType, parentNet);
+                if (!s.activeNetworks.includes(uniqueNetId)) {
+                    s.activeNetworks.push(uniqueNetId);
                     localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
                 }
                 if (!s.activeTypes.includes(parentType)) {
@@ -188,14 +193,20 @@ api.hooks.onGameInit(() => {
         };
 
         const toggleGroupAllLines = (groupLines, isGroupAllSelected, parentType, parentNet) => {
+            const uniqueNetId = getUniqueNetworkId(parentType, parentNet);
             let newActive = [...s.activeLines];
             if (isGroupAllSelected) {
                 newActive = newActive.filter(l => !groupLines.includes(l));
+                
+                if (s.activeNetworks.includes(uniqueNetId)) {
+                    s.activeNetworks = s.activeNetworks.filter(n => n !== uniqueNetId);
+                    localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
+                }
             } else {
                 groupLines.forEach(l => { if (!newActive.includes(l)) newActive.push(l); });
                 
-                if (!s.activeNetworks.includes(parentNet)) {
-                    s.activeNetworks.push(parentNet);
+                if (!s.activeNetworks.includes(uniqueNetId)) {
+                    s.activeNetworks.push(uniqueNetId);
                     localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
                 }
                 if (!s.activeTypes.includes(parentType)) {
@@ -255,7 +266,7 @@ api.hooks.onGameInit(() => {
                     if (isSingleNetwork) {
                         const net = networkKeys[0];
                         const groupLines = typeNetworks[net];
-                        const netIsVisible = s.activeNetworks.includes(net);
+                        const netIsVisible = s.activeNetworks.includes(getUniqueNetworkId(type, net));
                         const allActiveInGroup = typeIsVisible && netIsVisible && groupLines.every(l => s.activeLines.includes(l));
 
                         typeChildren = h('div', { style: { marginLeft: '24px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '4px 0', marginBottom: '8px' }, key: `${type}-flat-children` }, [
@@ -267,8 +278,9 @@ api.hooks.onGameInit(() => {
                             ]),
                             ...groupLines.map(lineId => {
                                 const isActive = s.activeLines.includes(lineId);
+                                const displayName = s.lineNames?.[lineId] || lineId;
                                 return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }, key: lineId }, [
-                                    h(Label, { style: { fontSize: '12px', cursor: 'pointer' }, onClick: () => toggleLine(lineId, type, net) }, lineId),
+                                    h(Label, { style: { fontSize: '12px', cursor: 'pointer' }, onClick: () => toggleLine(lineId, type, net) }, displayName),
                                     h(Switch, { checked: isActive, onCheckedChange: () => toggleLine(lineId, type, net) })
                                 ]);
                             })
@@ -279,7 +291,7 @@ api.hooks.onGameInit(() => {
                                 const groupLines = typeNetworks[net];
                                 const isNetExpanded = expandedGroups[`${type}-${net}`];
                                 
-                                const netIsVisible = s.activeNetworks.includes(net);
+                                const netIsVisible = s.activeNetworks.includes(getUniqueNetworkId(type, net));
                                 const allActiveInGroup = typeIsVisible && netIsVisible && groupLines.every(l => s.activeLines.includes(l));
 
                                 // Fixed: Neutral borders and opacity
@@ -308,8 +320,9 @@ api.hooks.onGameInit(() => {
                                         ]),
                                         ...groupLines.map(lineId => {
                                             const isActive = s.activeLines.includes(lineId);
+                                            const displayName = s.lineNames?.[lineId] || lineId;
                                             return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }, key: lineId }, [
-                                                h(Label, { style: { fontSize: '12px', cursor: 'pointer' }, onClick: () => toggleLine(lineId, type, net) }, lineId),
+                                                h(Label, { style: { fontSize: '12px', cursor: 'pointer' }, onClick: () => toggleLine(lineId, type, net) }, displayName),
                                                 h(Switch, { checked: isActive, onCheckedChange: () => toggleLine(lineId, type, net) })
                                             ]);
                                         })
@@ -409,23 +422,29 @@ async function updateCityData(map, manualCityCode = null) {
             const typesSet = new Set();
             const networksSet = new Set();
 
+            const lineNameMap = {};
             geojsonData.features.forEach(f => {
                 const p = f.properties;
-                const lineId = String(p.route_name || 'Unnamed Line');
+                const displayName = String(p.route_name || 'Unnamed Line');
                 const type = p.type || "Other"; 
                 const network = p.network || "Unknown";
                 
-                p._mod_line_id = lineId; 
+                // Create unique ID to separate same-named lines from different networks
+                const uniqueId = `${type}__${network}__${displayName}`;
+                
+                p._mod_line_id = uniqueId; 
+                lineNameMap[uniqueId] = displayName;
                 
                 if (f.geometry.type.includes('LineString') || p.is_station) {
-                    linesSet.add(lineId);
+                    linesSet.add(uniqueId);
                     typesSet.add(type);
-                    networksSet.add(network);
+                    networksSet.add(getUniqueNetworkId(type, network));
                     if (!rawHierarchy[type]) rawHierarchy[type] = {};
                     if (!rawHierarchy[type][network]) rawHierarchy[type][network] = new Set();
-                    rawHierarchy[type][network].add(lineId);
+                    rawHierarchy[type][network].add(uniqueId);
                 }
             });
+            window.RealTransitState.lineNames = lineNameMap;
 
             const formattedHierarchy = {};
             for (let t in rawHierarchy) {
@@ -505,7 +524,7 @@ function updateMapFilters(targetMap = null) {
         for (const type in s.hierarchy) {
             if (s.activeTypes.includes(type)) {
                 for (const net in s.hierarchy[type]) {
-                    if (s.activeNetworks.includes(net)) {
+                    if (s.activeNetworks.includes(getUniqueNetworkId(type, net))) {
                         const lines = s.hierarchy[type][net];
                         effectiveActiveLines.push(...lines.filter(l => s.activeLines.includes(l)));
                     }
