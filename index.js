@@ -13,11 +13,12 @@ window.RealTransitState = {
     stationsVisible: localStorage.getItem('rt_stations') === 'true',
     activeTypes: [],
     activeNetworks: [],
-    activeLines: [],      
-    hierarchy: {}, 
+    activeLines: [],
+    hierarchy: {},
     lineNames: {}, // Stores display names for unique IDs
-    currentCity: null, 
-    cache: {} 
+    currentCity: null,
+    overlayOpen: false, // Tracks if the overlay panel is open
+    cache: {}
 };
 
 api.hooks.onGameInit(() => {
@@ -25,32 +26,47 @@ api.hooks.onGameInit(() => {
 
     const { React, components, icons } = api.utils;
     const { Button, Card, CardContent, Switch, Label } = components;
-    const { Layers, ChevronDown, ChevronRight } = icons; 
+    const { Layers, ChevronDown, ChevronRight } = icons;
     const h = React.createElement;
 
-    const TransitDropdownMenu = () => {
+    // Component: Custom Button + Persistent Overlay Panel
+    const TransitPanel = () => {
+        // State to control panel visibility and render updates
         const [isOpen, setIsOpen] = React.useState(false);
         const [trigger, setTriggerRender] = React.useState(0);
         const [expandedGroups, setExpandedGroups] = React.useState({});
 
+        // Sync with global state events (optional, but good for persistence/other triggers)
         React.useEffect(() => {
-            const handler = () => setTriggerRender(prev => prev + 1);
+            const handler = () => {
+                setTriggerRender(prev => prev + 1);
+            };
             window.addEventListener('rt_data_loaded', handler);
             return () => window.removeEventListener('rt_data_loaded', handler);
         }, []);
 
+        const toggleOpen = () => {
+            const newState = !isOpen;
+            setIsOpen(newState);
+            window.RealTransitState.overlayOpen = newState;
+        };
+
         const s = window.RealTransitState;
+
+        // Sync global state to local if changed elsewhere (unlikely now, but safe)
+        if (s.overlayOpen !== isOpen) s.overlayOpen = isOpen;
+
         const hierarchy = s.hierarchy || {};
         const typeKeys = Object.keys(hierarchy);
-        
+
         let allUniqueLines = new Set();
         let activeUniqueLines = new Set();
-        
+
         for (const type in hierarchy) {
             for (const net in hierarchy[type]) {
                 const isTypeActive = s.activeTypes.includes(type);
                 const isNetActive = s.activeNetworks.includes(getUniqueNetworkId(type, net));
-                
+
                 hierarchy[type][net].forEach(l => {
                     allUniqueLines.add(`${type}-${net}-${l}`);
                     if (isTypeActive && isNetActive && s.activeLines.includes(l)) {
@@ -59,7 +75,7 @@ api.hooks.onGameInit(() => {
                 });
             }
         }
-        
+
         const totalLines = allUniqueLines.size;
         const activeCount = activeUniqueLines.size;
         const isAllSelected = totalLines > 0 && activeCount === totalLines;
@@ -81,7 +97,7 @@ api.hooks.onGameInit(() => {
                 const allTypes = new Set(Object.keys(hierarchy));
                 const allNets = new Set();
                 const allLines = new Set();
-                
+
                 for (const t in hierarchy) {
                     for (const n in hierarchy[t]) {
                         allNets.add(getUniqueNetworkId(t, n));
@@ -120,17 +136,17 @@ api.hooks.onGameInit(() => {
         const toggleTypeVisibility = (type) => {
             let active = [...s.activeTypes];
             let turningOn = false;
-            
+
             if (active.includes(type)) {
                 active = active.filter(t => t !== type);
             } else {
                 active.push(type);
                 turningOn = true;
             }
-            
+
             s.activeTypes = active;
             localStorage.setItem(`rt_active_types_${s.currentCity}`, JSON.stringify(active));
-            
+
             if (turningOn) ensureMasterVisible();
             updateMapFilters();
             setTriggerRender(p => p + 1);
@@ -140,7 +156,7 @@ api.hooks.onGameInit(() => {
             const uniqueId = getUniqueNetworkId(parentType, net);
             let active = [...s.activeNetworks];
             let turningOn = false;
-            
+
             if (active.includes(uniqueId)) {
                 active = active.filter(n => n !== uniqueId);
             } else {
@@ -149,7 +165,7 @@ api.hooks.onGameInit(() => {
             }
             s.activeNetworks = active;
             localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(active));
-            
+
             if (turningOn) {
                 if (!s.activeTypes.includes(parentType)) {
                     s.activeTypes.push(parentType);
@@ -165,7 +181,7 @@ api.hooks.onGameInit(() => {
         const toggleLine = (lineId, parentType, parentNet) => {
             let active = [...s.activeLines];
             let turningOn = false;
-            
+
             if (active.includes(lineId)) {
                 active = active.filter(l => l !== lineId);
             } else {
@@ -174,7 +190,7 @@ api.hooks.onGameInit(() => {
             }
             s.activeLines = active;
             localStorage.setItem(`rt_active_lines_${s.currentCity}`, JSON.stringify(active));
-            
+
             if (turningOn) {
                 const uniqueNetId = getUniqueNetworkId(parentType, parentNet);
                 if (!s.activeNetworks.includes(uniqueNetId)) {
@@ -197,14 +213,14 @@ api.hooks.onGameInit(() => {
             let newActive = [...s.activeLines];
             if (isGroupAllSelected) {
                 newActive = newActive.filter(l => !groupLines.includes(l));
-                
+
                 if (s.activeNetworks.includes(uniqueNetId)) {
                     s.activeNetworks = s.activeNetworks.filter(n => n !== uniqueNetId);
                     localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
                 }
             } else {
                 groupLines.forEach(l => { if (!newActive.includes(l)) newActive.push(l); });
-                
+
                 if (!s.activeNetworks.includes(uniqueNetId)) {
                     s.activeNetworks.push(uniqueNetId);
                     localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
@@ -225,7 +241,7 @@ api.hooks.onGameInit(() => {
             setExpandedGroups(prev => {
                 const isCurrentlyExpanded = prev[key];
                 const newState = { ...prev, [key]: !isCurrentlyExpanded };
-                
+
                 if (isCurrentlyExpanded && networksToCollapse) {
                     networksToCollapse.forEach(net => {
                         newState[`${key}-${net}`] = false;
@@ -235,150 +251,166 @@ api.hooks.onGameInit(() => {
             });
         };
 
-        let panel = null;
-        if (isOpen) {
-            const typeElements = typeKeys.sort(naturalSort).map(type => {
-                const typeNetworks = hierarchy[type];
-                const networkKeys = Object.keys(typeNetworks).sort(naturalSort);
-                const typeIsVisible = s.activeTypes.includes(type);
-                const isTypeExpanded = expandedGroups[type];
+        const typeElements = typeKeys.sort(naturalSort).map(type => {
+            const typeNetworks = hierarchy[type];
+            const networkKeys = Object.keys(typeNetworks).sort(naturalSort);
+            const typeIsVisible = s.activeTypes.includes(type);
+            const isTypeExpanded = expandedGroups[type];
 
-                const isSingleNetwork = networkKeys.length === 1;
-                const displayName = isSingleNetwork ? networkKeys[0] : type;
+            const isSingleNetwork = networkKeys.length === 1;
+            const displayName = isSingleNetwork ? networkKeys[0] : type;
 
-                // Fixed: Neutral border color, text uses opacity instead of hardcoded white
-                const typeHeader = h('div', { 
-                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' },
-                    key: `${type}-header` 
+            const typeHeader = h('div', {
+                className: 'flex items-center justify-between py-2 border-b border-gray-500/20',
+                key: `${type}-header`
+            }, [
+                h('div', {
+                    className: `flex items-center gap-2 cursor-pointer transition-opacity ${isTypeExpanded ? 'opacity-100' : 'opacity-60'}`,
+                    onClick: () => toggleGroupExpand(type, networkKeys)
                 }, [
-                    h('div', { 
-                        style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', opacity: isTypeExpanded ? 1 : 0.6 },
-                        onClick: () => toggleGroupExpand(type, networkKeys) 
-                    }, [
-                        h(isTypeExpanded ? ChevronDown : ChevronRight, { size: 16 }),
-                        h(Label, { style: { fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' } }, displayName)
-                    ]),
-                    h(Switch, { checked: typeIsVisible, onCheckedChange: () => toggleTypeVisibility(type) })
-                ]);
+                    h(isTypeExpanded ? ChevronDown : ChevronRight, { size: 16 }),
+                    h(Label, { className: 'font-bold cursor-pointer text-sm' }, displayName)
+                ]),
+                h(Switch, { checked: typeIsVisible, onCheckedChange: () => toggleTypeVisibility(type) })
+            ]);
 
-                let typeChildren = null;
-                if (isTypeExpanded) {
-                    if (isSingleNetwork) {
-                        const net = networkKeys[0];
-                        const groupLines = typeNetworks[net];
-                        const netIsVisible = s.activeNetworks.includes(getUniqueNetworkId(type, net));
-                        const allActiveInGroup = typeIsVisible && netIsVisible && groupLines.every(l => s.activeLines.includes(l));
+            let typeChildren = null;
+            if (isTypeExpanded) {
+                if (isSingleNetwork) {
+                    const net = networkKeys[0];
+                    const groupLines = typeNetworks[net];
+                    const netIsVisible = s.activeNetworks.includes(getUniqueNetworkId(type, net));
+                    const allActiveInGroup = typeIsVisible && netIsVisible && groupLines.every(l => s.activeLines.includes(l));
 
-                        typeChildren = h('div', { style: { marginLeft: '24px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '4px 0', marginBottom: '8px' }, key: `${type}-flat-children` }, [
-                            h('div', { style: { display: 'flex', gap: '8px', paddingBottom: '4px', borderBottom: '1px solid rgba(128,128,128,0.15)' } }, [
-                                h(Button, { 
-                                    variant: 'ghost', size: 'sm', style: { height: '20px', padding: '0 8px', fontSize: '10px' },
-                                    onClick: () => toggleGroupAllLines(groupLines, allActiveInGroup, type, net) 
-                                }, allActiveInGroup ? "Deselect All" : "Select All")
-                            ]),
-                            ...groupLines.map(lineId => {
-                                const isActive = s.activeLines.includes(lineId);
-                                const displayName = s.lineNames?.[lineId] || lineId;
-                                return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }, key: lineId }, [
-                                    h(Label, { style: { fontSize: '12px', cursor: 'pointer' }, onClick: () => toggleLine(lineId, type, net) }, displayName),
-                                    h(Switch, { checked: isActive, onCheckedChange: () => toggleLine(lineId, type, net) })
-                                ]);
-                            })
-                        ]);
-                    } else {
-                        typeChildren = h('div', { style: { marginLeft: '12px', marginTop: '4px', marginBottom: '8px', display: 'flex', flexDirection: 'column' } },
-                            networkKeys.map(net => {
-                                const groupLines = typeNetworks[net];
-                                const isNetExpanded = expandedGroups[`${type}-${net}`];
-                                
-                                const netIsVisible = s.activeNetworks.includes(getUniqueNetworkId(type, net));
-                                const allActiveInGroup = typeIsVisible && netIsVisible && groupLines.every(l => s.activeLines.includes(l));
+                    // Single Network Case: Lines are direct children
+                    typeChildren = h('div', { className: 'ml-4 pl-2 border-l border-gray-500/10 flex flex-col gap-1 py-1 mb-2', key: `${type}-flat-children` }, [
+                        h('div', { className: 'flex gap-2 pb-1 border-b border-gray-500/15' }, [
+                            h(Button, {
+                                variant: 'ghost', size: 'sm', className: 'h-5 px-2 text-[10px]',
+                                onClick: () => toggleGroupAllLines(groupLines, allActiveInGroup, type, net)
+                            }, allActiveInGroup ? "Deselect All" : "Select All")
+                        ]),
+                        ...groupLines.map(lineId => {
+                            const isActive = s.activeLines.includes(lineId);
+                            const displayName = s.lineNames?.[lineId] || lineId;
+                            return h('div', { className: 'flex items-center justify-between py-0.5', key: lineId }, [
+                                h(Label, { className: 'text-xs cursor-pointer', onClick: () => toggleLine(lineId, type, net) }, displayName),
+                                h(Switch, { checked: isActive, onCheckedChange: () => toggleLine(lineId, type, net) })
+                            ]);
+                        })
+                    ]);
+                } else {
+                    // Multi-Network Case: Networks are children
+                    typeChildren = h('div', { className: 'ml-2 mt-1 mb-2 flex flex-col', key: `${type}-grouped-children` },
+                        networkKeys.map(net => {
+                            const groupLines = typeNetworks[net];
+                            const isNetExpanded = expandedGroups[`${type}-${net}`];
 
-                                // Fixed: Neutral borders and opacity
-                                const netHeader = h('div', { 
-                                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.15)' },
-                                    key: `${net}-header` 
+                            const netIsVisible = s.activeNetworks.includes(getUniqueNetworkId(type, net));
+                            const allActiveInGroup = typeIsVisible && netIsVisible && groupLines.every(l => s.activeLines.includes(l));
+
+                            const netHeader = h('div', {
+                                className: 'flex items-center justify-between py-1.5 border-b border-gray-500/15 ml-2',
+                                key: `${net}-header`
+                            }, [
+                                h('div', {
+                                    className: `flex items-center gap-2 cursor-pointer transition-opacity ${isNetExpanded ? 'opacity-100' : 'opacity-60'}`,
+                                    onClick: () => toggleGroupExpand(`${type}-${net}`)
                                 }, [
-                                    h('div', { 
-                                        style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', opacity: isNetExpanded ? 1 : 0.6 },
-                                        onClick: () => toggleGroupExpand(`${type}-${net}`) 
-                                    }, [
-                                        h(isNetExpanded ? ChevronDown : ChevronRight, { size: 14 }),
-                                        h(Label, { style: { fontWeight: '600', cursor: 'pointer', fontSize: '13px' } }, net)
-                                    ]),
-                                    h(Switch, { checked: netIsVisible, onCheckedChange: () => toggleNetworkVisibility(net, type) })
-                                ]);
+                                    h(isNetExpanded ? ChevronDown : ChevronRight, { size: 14 }),
+                                    h(Label, { className: 'font-semibold cursor-pointer text-xs' }, net)
+                                ]),
+                                h(Switch, { checked: netIsVisible, onCheckedChange: () => toggleNetworkVisibility(net, type) })
+                            ]);
 
-                                let netChildren = null;
-                                if (isNetExpanded) {
-                                    netChildren = h('div', { style: { marginLeft: '20px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '4px 0' }, key: `${net}-children` }, [
-                                        h('div', { style: { display: 'flex', gap: '8px', paddingBottom: '4px' } }, [
-                                            h(Button, { 
-                                                variant: 'ghost', size: 'sm', style: { height: '20px', padding: '0 8px', fontSize: '10px' },
-                                                onClick: () => toggleGroupAllLines(groupLines, allActiveInGroup, type, net) 
+                            let netChildren = null;
+                            if (isNetExpanded) {
+                                // Nested Lines Indentation
+                                netChildren =
+                                    h('div', {
+                                        className: 'pl-2 border-l border-gray-500/10 flex flex-col gap-1 py-1',
+                                        style: { marginLeft: '20px' },
+                                        key: `${net}-children`
+                                    }, [
+                                        h('div', { className: 'flex gap-2 pb-1' }, [
+                                            h(Button, {
+                                                variant: 'ghost', size: 'sm', className: 'h-5 px-2 text-[10px]',
+                                                onClick: () => toggleGroupAllLines(groupLines, allActiveInGroup, type, net)
                                             }, allActiveInGroup ? "Deselect All" : "Select All")
                                         ]),
                                         ...groupLines.map(lineId => {
                                             const isActive = s.activeLines.includes(lineId);
                                             const displayName = s.lineNames?.[lineId] || lineId;
-                                            return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }, key: lineId }, [
-                                                h(Label, { style: { fontSize: '12px', cursor: 'pointer' }, onClick: () => toggleLine(lineId, type, net) }, displayName),
+                                            return h('div', { className: 'flex items-center justify-between py-0.5', key: lineId }, [
+                                                h(Label, { className: 'text-xs cursor-pointer', onClick: () => toggleLine(lineId, type, net) }, displayName),
                                                 h(Switch, { checked: isActive, onCheckedChange: () => toggleLine(lineId, type, net) })
                                             ]);
                                         })
                                     ]);
-                                }
-                                return h('div', { key: net }, [netHeader, netChildren]);
-                            })
-                        );
-                    }
+                            }
+                            return h('div', { key: net }, [netHeader, netChildren]);
+                        })
+                    );
                 }
-                return h('div', { key: type, style: { display: 'flex', flexDirection: 'column' } }, [typeHeader, typeChildren]);
-            });
+            }
+            return h('div', { key: type, className: 'flex flex-col' }, [typeHeader, typeChildren]);
+        });
 
-            // Fixed shadow to be less harsh in light mode
-            panel = h(Card, { 
-                style: { position: 'fixed', top: '60px', right: '16px', width: '300px', zIndex: 99999, maxHeight: '75vh', overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }
-            }, [
-                h(CardContent, { style: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' } }, [
-                    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '12px', borderBottom: '1px solid rgba(128,128,128,0.2)' } }, [
-                        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } }, [
-                            h(Label, { style: { fontWeight: 'bold' } }, "Show Overlay"),
-                            h(Switch, { checked: s.masterVisible, onCheckedChange: toggleMaster })
-                        ]),
-                        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } }, [
-                            h(Label, { style: { fontWeight: 'bold' } }, "Show Stations"),
-                            h(Switch, { checked: s.stationsVisible, onCheckedChange: toggleStations })
-                        ])
+        // Main Panel Component
+        const panel = isOpen ? h(Card, {
+            // Card Container: Use explicit styles for layout/scroll handling
+            // Ensure panel fits within screen height with calculated max-height
+            // Using explicit style to force constraints
+            style: { maxHeight: 'calc(100vh - 245px)', display: 'flex', flexDirection: 'column' },
+            className: 'fixed top-[60px] right-4 w-[320px] z-[99999] pointer-events-auto bg-primary-foreground/80 backdrop-blur-sm border border-border/50 rounded-lg shadow-lg overflow-hidden',
+        }, [
+            // 1. Fixed Header Section (Toggles)
+            h('div', { className: 'p-3 border-b border-gray-500/20 flex-none bg-inherit' }, [
+                h('div', { className: 'flex flex-col gap-2' }, [
+                    h('div', { className: 'flex items-center justify-between' }, [
+                        h(Label, { className: 'font-bold' }, "Show Overlay"),
+                        h(Switch, { checked: s.masterVisible, onCheckedChange: toggleMaster })
                     ]),
-                    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } }, [
-                        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', marginTop: '4px' } }, [
-                            h('div', null, [
-                                h(Label, { style: { fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.7, display: 'block' } }, "Transit Networks"),
-                                h('div', { style: { fontSize: '10px', opacity: 0.5, marginTop: '2px' } }, `Showing ${displayCount} of ${totalLines} lines`)
-                            ]),
-                            totalLines > 0 ? h(Button, { 
-                                variant: 'ghost', size: 'sm', style: { height: '24px', padding: '0 8px', fontSize: '12px' }, 
-                                onClick: toggleMasterAll
-                            }, isAllSelected ? "Deselect All" : "Select All") : null
-                        ]),
-                        totalLines > 0 ? typeElements : h('div', { style: { fontSize: '12px', opacity: 0.7 } }, "No lines found in data.")
+                    h('div', { className: 'flex items-center justify-between' }, [
+                        h(Label, { className: 'font-bold' }, "Show Stations"),
+                        h(Switch, { checked: s.stationsVisible, onCheckedChange: toggleStations })
                     ])
                 ])
-            ]);
-        }
+            ]),
+            // 2. Scrollable List Section
+            h('div', { className: 'flex-1 overflow-y-auto min-h-0 p-2' }, [
+                h('div', { className: 'flex flex-col gap-1' }, [
+                    h('div', { className: 'flex items-center justify-between mb-2 mt-1 px-1' }, [
+                        h('div', null, [
+                            h(Label, { className: 'text-xs uppercase tracking-wider opacity-70 block' }, "Transit Networks"),
+                            h('div', { className: 'text-[10px] opacity-50 mt-0.5' }, `Showing ${displayCount} of ${totalLines} lines`)
+                        ]),
+                        totalLines > 0 ? h(Button, {
+                            variant: 'ghost', size: 'sm', className: 'h-6 px-2 text-xs',
+                            onClick: toggleMasterAll
+                        }, isAllSelected ? "Deselect All" : "Select All") : null
+                    ]),
+                    totalLines > 0 ? typeElements : h('div', { className: 'text-xs opacity-70 px-1' }, "No lines found in data.")
+                ])
+            ])
+        ]) : null;
 
-        return h('div', null, [
-            h(Button, {
-                variant: s.masterVisible ? 'default' : 'secondary', 
-                style: { width: '36px', height: '36px', padding: '0', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-                onClick: () => setIsOpen(!isOpen)
-            }, [ h(Layers, { size: 18 }) ]),
+        return h('div', { className: 'relative' }, [
+            h('div', {
+                key: 'btn',
+                onClick: toggleOpen,
+                title: 'Open layers panel',
+                // Toggle Button
+                className: `h-10 w-10 flex items-center justify-center rounded-md cursor-pointer transition-all shadow-sm backdrop-blur-sm border border-primary/10 pointer-events-auto ${isOpen ? 'bg-primary text-primary-foreground' : 'bg-primary-foreground/70 text-primary/70 hover:text-primary hover:bg-primary-foreground/90'}`
+            }, [
+                h(Layers, { className: "w-5 h-5 stroke-[1.5]" })
+            ]),
             panel
         ]);
     };
 
-    api.ui.registerComponent('top-bar', { id: 'real-transit-menu', component: TransitDropdownMenu });
+    // Register component using the custom pattern
+    api.ui.registerComponent('top-bar', { id: 'real-transit-overlay', component: TransitPanel });
 });
 
 api.hooks.onCityLoad((cityCode) => {
@@ -396,9 +428,9 @@ api.hooks.onMapReady((map) => {
             const s = window.RealTransitState;
             const currentCity = s.currentCity || getCurrentCityCode();
             if (!map.getSource(SOURCE_ID) && s.cache[currentCity]) injectLayers(map, s.cache[currentCity]);
-            if (map.getLayer(LAYER_ID_LINES)) map.moveLayer(LAYER_ID_LINES); 
+            if (map.getLayer(LAYER_ID_LINES)) map.moveLayer(LAYER_ID_LINES);
             if (map.getLayer(LAYER_ID_STATIONS)) map.moveLayer(LAYER_ID_STATIONS);
-        } catch (err) {}
+        } catch (err) { }
     });
 });
 
@@ -414,7 +446,7 @@ async function updateCityData(map, manualCityCode = null) {
         let modsDir = await window.electron.getModsFolder();
         const localFileUrl = `file:///${modsDir.replaceAll('\\', '/')}/Transit Overlay/data/${cityCode.toLowerCase()}.geojson`;
         const response = await fetch(localFileUrl);
-        
+
         if (response.ok) {
             let geojsonData = await response.json();
             const rawHierarchy = {};
@@ -426,15 +458,15 @@ async function updateCityData(map, manualCityCode = null) {
             geojsonData.features.forEach(f => {
                 const p = f.properties;
                 const displayName = String(p.route_name || 'Unnamed Line');
-                const type = p.type || "Other"; 
+                const type = p.type || "Other";
                 const network = p.network || "Unknown";
-                
+
                 // Create unique ID to separate same-named lines from different networks
                 const uniqueId = `${type}__${network}__${displayName}`;
-                
-                p._mod_line_id = uniqueId; 
+
+                p._mod_line_id = uniqueId;
                 lineNameMap[uniqueId] = displayName;
-                
+
                 if (f.geometry.type.includes('LineString') || p.is_station) {
                     linesSet.add(uniqueId);
                     typesSet.add(type);
@@ -468,7 +500,7 @@ async function updateCityData(map, manualCityCode = null) {
 
             window.RealTransitState.cache[cityCode] = geojsonData;
             window.dispatchEvent(new CustomEvent('rt_data_loaded'));
-            
+
             injectLayers(map, geojsonData);
         }
     } catch (e) {
@@ -510,7 +542,7 @@ function injectLayers(map, geojsonData) {
 function updateMapFilters(targetMap = null) {
     const map = targetMap || api.utils.getMap();
     if (!map || !map.getLayer(LAYER_ID_LINES)) return;
-    
+
     const s = window.RealTransitState;
 
     if (!s.masterVisible) {
@@ -562,7 +594,7 @@ function getCurrentCityCode() {
     const closest = cities.find(c => {
         const dx = c.initialViewState.longitude - center.lng;
         const dy = c.initialViewState.latitude - center.lat;
-        return (dx*dx + dy*dy) < 4.0; 
+        return (dx * dx + dy * dy) < 4.0;
     });
     return closest ? closest.code : null;
 }
