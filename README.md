@@ -47,3 +47,4 @@ The mod currently includes transit data for the following cities:
 * **Seattle** (`sea.geojson`)
 * **Chicago** (`chi.geojson`)
 * **San Francisco Bay Area** (`sf.geojson`)
+* **Philadelphia** (`phl.geojson`)
