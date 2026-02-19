@@ -428,7 +428,7 @@ api.hooks.onGameInit(() => {
             h('div', {
                 key: 'btn',
                 onClick: toggleOpen,
-                title: 'Open layers panel',
+                title: 'Open transit panel',
                 // Toggle Button
                 className: `h-10 w-10 flex items-center justify-center rounded-md cursor-pointer transition-all shadow-sm backdrop-blur-sm border border-primary/10 pointer-events-auto ${isOpen ? 'bg-primary text-primary-foreground' : 'bg-primary-foreground/70 text-primary/70 hover:text-primary hover:bg-primary-foreground/90'}`
             }, [
