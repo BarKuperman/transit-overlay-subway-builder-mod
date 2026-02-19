@@ -39,6 +39,7 @@ Once inside a map, a new **Transit Overlay** button will appear in your bottom b
 
 ## 🌍 Included Data
 The mod currently includes transit data for the following cities:
+* **Atlanta** (`atl.geojson`)
 * **Boston** (`bos.geojson`)
 * **Chicago** (`chi.geojson`)
 * **Dallas** (`dal.geojson`)
