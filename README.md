@@ -51,6 +51,7 @@ The mod currently includes transit data for the following cities:
 * **Paris** (`par.geojson`)
 * **Philadelphia** (`phl.geojson`)
 * **Phoenix** (`phx.geojson`)
+* **Portland, Oregon** (`pdx.geojson`)
 * **San Diego** (`san.geojson`)
 * **San Francisco Bay Area** (`sf.geojson`)
 * **Seattle** (`sea.geojson`)
