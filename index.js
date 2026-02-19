@@ -23,8 +23,23 @@ window.RealTransitState = {
     lineNames: {}, // Stores display names for unique IDs
     currentCity: null,
     overlayOpen: false, // Tracks if the overlay panel is open
-    cache: {}
+    cache: {},
+    inFlightLoads: new Set(),
+    missingDataCities: new Set(),
+    missingDataLoggedCities: new Set(),
+    loadRequestSeq: 0,
+    uiRegistered: false
 };
+
+function registerOverlayUiComponent() {
+    if (window.RealTransitState.uiRegistered) return;
+    if (!window.RealTransitOverlayComponent) return;
+    api.ui.registerComponent('top-bar', {
+        id: 'real-transit-overlay',
+        component: window.RealTransitOverlayComponent
+    });
+    window.RealTransitState.uiRegistered = true;
+}
 
 function safeLoadArray(key, fallback = []) {
     try {
@@ -51,7 +66,6 @@ function saveCityStateArray(s, suffix, value) {
 }
 
 api.hooks.onGameInit(() => {
-    api.ui.showNotification("✅ Real Transit Menu Loaded", "success");
 
     const { React, components, icons } = api.utils;
     const { Button, Card, CardContent, Switch, Label } = components;
@@ -439,20 +453,25 @@ api.hooks.onGameInit(() => {
     };
 
     // Register component using the custom pattern
-    api.ui.registerComponent('top-bar', { id: 'real-transit-overlay', component: TransitPanel });
+    window.RealTransitOverlayComponent = TransitPanel;
+    registerOverlayUiComponent();
+    console.info('[Transit Overlay] Mod initialized.');
 });
 
 api.hooks.onCityLoad((cityCode) => {
     window.RealTransitState.currentCity = cityCode;
     const map = api.utils.getMap();
-    if (map) updateCityData(map, cityCode);
+    updateCityData(map || null, cityCode);
 });
 
 api.hooks.onMapReady((map) => {
-    const cityCode = window.RealTransitState.currentCity || getCurrentCityCode();
-    updateCityData(map, cityCode);
-
+    registerOverlayUiComponent();
     map.on('styledata', () => handleStyleDataRefresh(map));
+    handleStyleDataRefresh(map);
+});
+
+api.hooks.onGameEnd(() => {
+    window.RealTransitState.uiRegistered = false;
 });
 
 function safelyMoveLayer(map, layerId, beforeLayerId = null) {
@@ -473,10 +492,12 @@ function ensureTransitLayerOrder(map) {
 function handleStyleDataRefresh(map) {
     try {
         const s = window.RealTransitState;
-        const currentCity = s.currentCity || getCurrentCityCode();
-        const cachedCityData = currentCity ? s.cache[currentCity] : null;
+        const currentCity = s.currentCity;
+        if (!currentCity) return;
+        const cachedCityData = s.cache[currentCity];
+        if (!cachedCityData) return;
 
-        if (!hasTransitSource(map) && cachedCityData) {
+        if (!hasTransitSource(map)) {
             injectLayers(map, cachedCityData);
         } else {
             ensureTransitLayerOrder(map);
@@ -548,36 +569,126 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
     saveCityStateArray(s, 'active_nets', s.activeNetworks);
 }
 
-async function updateCityData(map, manualCityCode = null) {
-    const cityCode = manualCityCode || window.RealTransitState.currentCity || getCurrentCityCode();
-    if (!cityCode) return;
+function applyNoDataCityState(cityCode, map = null) {
+    const s = window.RealTransitState;
+    s.currentCity = cityCode;
+    s.hierarchy = {};
+    s.lineNames = {};
+    s.activeLines = [];
+    s.activeTypes = [];
+    s.activeNetworks = [];
+    window.dispatchEvent(new CustomEvent('rt_data_loaded'));
 
-    const cached = window.RealTransitState.cache[cityCode];
-    if (cached) {
-        hydrateCityStateFromGeoJson(cityCode, cached);
-        window.dispatchEvent(new CustomEvent('rt_data_loaded'));
-        injectLayers(map, cached);
+    const resolvedMap = map || api.utils.getMap();
+    if (!resolvedMap || !resolvedMap.getSource) return;
+
+    const source = resolvedMap.getSource(SOURCE_ID);
+    if (source && source.setData) {
+        source.setData({ type: 'FeatureCollection', features: [] });
+    }
+
+    updateMapFilters(resolvedMap);
+}
+
+async function updateCityData(map, manualCityCode = null) {
+    const s = window.RealTransitState;
+    const cityCode = manualCityCode || window.RealTransitState.currentCity || getCurrentCityCode();
+    const getResolvedMap = () => map || api.utils.getMap();
+
+    if (!cityCode) {
+        console.warn('[Transit Overlay] No city code resolved; skipping transit data load.');
         return;
     }
 
+    if (s.inFlightLoads.has(cityCode)) return;
+    if (s.missingDataCities.has(cityCode) && !s.cache[cityCode]) {
+        applyNoDataCityState(cityCode, getResolvedMap());
+        return;
+    }
+
+    const requestId = ++s.loadRequestSeq;
+    const isStaleRequest = () => {
+        const latestCity = window.RealTransitState.currentCity;
+        return requestId !== window.RealTransitState.loadRequestSeq || (!!latestCity && latestCity !== cityCode);
+    };
+    if (isStaleRequest()) return;
+
+    const cached = s.cache[cityCode];
+    if (cached) {
+        if (isStaleRequest()) return;
+        hydrateCityStateFromGeoJson(cityCode, cached);
+        window.dispatchEvent(new CustomEvent('rt_data_loaded'));
+        const resolvedMap = getResolvedMap();
+        if (resolvedMap) {
+            injectLayers(resolvedMap, cached);
+        } else {
+            console.warn(`[Transit Overlay] Map is not ready yet; deferred layer injection for ${cityCode}.`);
+        }
+        if (
+            manualCityCode &&
+            !isStaleRequest() &&
+            window.RealTransitState.currentCity === cityCode
+        ) {
+            console.info(`[Transit Overlay] Loaded transit data for ${cityCode} from cache.`);
+        }
+        return;
+    }
+
+    s.inFlightLoads.add(cityCode);
     try {
         let modsDir = await window.electron.getModsFolder();
         const localFileUrl = `file:///${modsDir.replaceAll('\\', '/')}/Transit Overlay/data/${cityCode.toLowerCase()}.geojson`;
         const response = await fetch(localFileUrl);
 
         if (response.ok) {
+            if (isStaleRequest()) return;
             let geojsonData = await response.json();
+            if (isStaleRequest()) return;
             hydrateCityStateFromGeoJson(cityCode, geojsonData);
-            window.RealTransitState.cache[cityCode] = geojsonData;
+            s.cache[cityCode] = geojsonData;
+            s.missingDataCities.delete(cityCode);
+            s.missingDataLoggedCities.delete(cityCode);
             window.dispatchEvent(new CustomEvent('rt_data_loaded'));
-            injectLayers(map, geojsonData);
+            const resolvedMap = getResolvedMap();
+            if (resolvedMap) {
+                injectLayers(resolvedMap, geojsonData);
+            } else {
+                console.warn(`[Transit Overlay] Map is not ready yet; deferred layer injection for ${cityCode}.`);
+            }
+            console.info(`[Transit Overlay] Loaded transit data for ${cityCode} from file.`);
+        } else {
+            if (isStaleRequest()) return;
+            s.missingDataCities.add(cityCode);
+            if (!s.missingDataLoggedCities.has(cityCode)) {
+                console.warn(`[Transit Overlay] No local transit data for ${cityCode} (HTTP ${response.status} ${response.statusText}).`);
+                s.missingDataLoggedCities.add(cityCode);
+            }
+            applyNoDataCityState(cityCode, getResolvedMap());
         }
     } catch (e) {
-        console.error(`[RealLines] Failed to load local data for ${cityCode}:`, e);
+        if (isStaleRequest()) return;
+        const isMissingData = e && String(e.message || e).includes('Failed to fetch');
+        if (isMissingData) {
+            s.missingDataCities.add(cityCode);
+            if (!s.missingDataLoggedCities.has(cityCode)) {
+                console.warn(`[Transit Overlay] No local transit data for ${cityCode} (file missing or unsupported city).`);
+                s.missingDataLoggedCities.add(cityCode);
+            }
+            applyNoDataCityState(cityCode, getResolvedMap());
+        } else {
+            console.error(`[Transit Overlay] Failed to load local data for ${cityCode}:`, e);
+        }
+    } finally {
+        s.inFlightLoads.delete(cityCode);
     }
 }
 
 function injectLayers(map, geojsonData) {
+    if (!map || !map.getSource || !map.addSource || !map.getLayer || !map.addLayer) {
+        console.warn('[Transit Overlay] Cannot inject layers: map instance is not ready.');
+        return;
+    }
+
     if (!hasTransitSource(map)) {
         map.addSource(SOURCE_ID, { type: 'geojson', data: geojsonData });
     } else {
@@ -666,3 +777,7 @@ function getCurrentCityCode() {
     });
     return closest ? closest.code : null;
 }
+
+
+
+
