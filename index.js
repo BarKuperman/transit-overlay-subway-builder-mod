@@ -8,6 +8,11 @@ const LAYER_ID_LINES = 'real-transit-lines';
 const LAYER_ID_STATIONS = 'real-transit-stations';
 const SOURCE_ID = 'real-transit-source';
 
+const hasTransitSource = (map) => !!(map && map.getSource && map.getSource(SOURCE_ID));
+const hasLinesLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_LINES));
+const hasStationsLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_STATIONS));
+const canApplyFilters = (map) => hasTransitSource(map) && hasLinesLayer(map);
+
 window.RealTransitState = {
     masterVisible: localStorage.getItem('rt_master') !== 'false',
     stationsVisible: localStorage.getItem('rt_stations') === 'true',
@@ -20,6 +25,30 @@ window.RealTransitState = {
     overlayOpen: false, // Tracks if the overlay panel is open
     cache: {}
 };
+
+function safeLoadArray(key, fallback = []) {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return Array.isArray(fallback) ? [...fallback] : [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : (Array.isArray(fallback) ? [...fallback] : []);
+    } catch (err) {
+        return Array.isArray(fallback) ? [...fallback] : [];
+    }
+}
+
+function safeSaveArray(key, value) {
+    if (!key) return;
+    const arrayValue = Array.isArray(value) ? value : [];
+    try {
+        localStorage.setItem(key, JSON.stringify(arrayValue));
+    } catch (err) { }
+}
+
+function saveCityStateArray(s, suffix, value) {
+    if (!s || !s.currentCity) return;
+    safeSaveArray(`rt_${suffix}_${s.currentCity}`, value);
+}
 
 api.hooks.onGameInit(() => {
     api.ui.showNotification("✅ Real Transit Menu Loaded", "success");
@@ -111,9 +140,9 @@ api.hooks.onGameInit(() => {
                 ensureMasterVisible();
             }
 
-            localStorage.setItem(`rt_active_types_${s.currentCity}`, JSON.stringify(s.activeTypes));
-            localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
-            localStorage.setItem(`rt_active_lines_${s.currentCity}`, JSON.stringify(s.activeLines));
+            saveCityStateArray(s, 'active_types', s.activeTypes);
+            saveCityStateArray(s, 'active_nets', s.activeNetworks);
+            saveCityStateArray(s, 'active_lines', s.activeLines);
 
             updateMapFilters();
             setTriggerRender(p => p + 1);
@@ -145,7 +174,7 @@ api.hooks.onGameInit(() => {
             }
 
             s.activeTypes = active;
-            localStorage.setItem(`rt_active_types_${s.currentCity}`, JSON.stringify(active));
+            saveCityStateArray(s, 'active_types', active);
 
             if (turningOn) ensureMasterVisible();
             updateMapFilters();
@@ -164,12 +193,12 @@ api.hooks.onGameInit(() => {
                 turningOn = true;
             }
             s.activeNetworks = active;
-            localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(active));
+            saveCityStateArray(s, 'active_nets', active);
 
             if (turningOn) {
                 if (!s.activeTypes.includes(parentType)) {
                     s.activeTypes.push(parentType);
-                    localStorage.setItem(`rt_active_types_${s.currentCity}`, JSON.stringify(s.activeTypes));
+                    saveCityStateArray(s, 'active_types', s.activeTypes);
                 }
                 ensureMasterVisible();
             }
@@ -189,17 +218,17 @@ api.hooks.onGameInit(() => {
                 turningOn = true;
             }
             s.activeLines = active;
-            localStorage.setItem(`rt_active_lines_${s.currentCity}`, JSON.stringify(active));
+            saveCityStateArray(s, 'active_lines', active);
 
             if (turningOn) {
                 const uniqueNetId = getUniqueNetworkId(parentType, parentNet);
                 if (!s.activeNetworks.includes(uniqueNetId)) {
                     s.activeNetworks.push(uniqueNetId);
-                    localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
+                    saveCityStateArray(s, 'active_nets', s.activeNetworks);
                 }
                 if (!s.activeTypes.includes(parentType)) {
                     s.activeTypes.push(parentType);
-                    localStorage.setItem(`rt_active_types_${s.currentCity}`, JSON.stringify(s.activeTypes));
+                    saveCityStateArray(s, 'active_types', s.activeTypes);
                 }
                 ensureMasterVisible();
             }
@@ -216,23 +245,23 @@ api.hooks.onGameInit(() => {
 
                 if (s.activeNetworks.includes(uniqueNetId)) {
                     s.activeNetworks = s.activeNetworks.filter(n => n !== uniqueNetId);
-                    localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
+                    saveCityStateArray(s, 'active_nets', s.activeNetworks);
                 }
             } else {
                 groupLines.forEach(l => { if (!newActive.includes(l)) newActive.push(l); });
 
                 if (!s.activeNetworks.includes(uniqueNetId)) {
                     s.activeNetworks.push(uniqueNetId);
-                    localStorage.setItem(`rt_active_nets_${s.currentCity}`, JSON.stringify(s.activeNetworks));
+                    saveCityStateArray(s, 'active_nets', s.activeNetworks);
                 }
                 if (!s.activeTypes.includes(parentType)) {
                     s.activeTypes.push(parentType);
-                    localStorage.setItem(`rt_active_types_${s.currentCity}`, JSON.stringify(s.activeTypes));
+                    saveCityStateArray(s, 'active_types', s.activeTypes);
                 }
                 ensureMasterVisible();
             }
             s.activeLines = newActive;
-            localStorage.setItem(`rt_active_lines_${s.currentCity}`, JSON.stringify(s.activeLines));
+            saveCityStateArray(s, 'active_lines', s.activeLines);
             updateMapFilters();
             setTriggerRender(p => p + 1);
         };
@@ -423,22 +452,111 @@ api.hooks.onMapReady((map) => {
     const cityCode = window.RealTransitState.currentCity || getCurrentCityCode();
     updateCityData(map, cityCode);
 
-    map.on('styledata', () => {
-        try {
-            const s = window.RealTransitState;
-            const currentCity = s.currentCity || getCurrentCityCode();
-            if (!map.getSource(SOURCE_ID) && s.cache[currentCity]) injectLayers(map, s.cache[currentCity]);
-            if (map.getLayer(LAYER_ID_LINES)) map.moveLayer(LAYER_ID_LINES);
-            if (map.getLayer(LAYER_ID_STATIONS)) map.moveLayer(LAYER_ID_STATIONS);
-        } catch (err) { }
-    });
+    map.on('styledata', () => handleStyleDataRefresh(map));
 });
+
+function safelyMoveLayer(map, layerId, beforeLayerId = null) {
+    if (!map || !map.getLayer || !map.moveLayer || !map.getLayer(layerId)) return;
+    if (beforeLayerId && map.getLayer(beforeLayerId)) {
+        map.moveLayer(layerId, beforeLayerId);
+        return;
+    }
+    map.moveLayer(layerId);
+}
+
+function ensureTransitLayerOrder(map) {
+    if (!map) return;
+    safelyMoveLayer(map, LAYER_ID_LINES, 'road-label');
+    safelyMoveLayer(map, LAYER_ID_STATIONS, 'road-label');
+}
+
+function handleStyleDataRefresh(map) {
+    try {
+        const s = window.RealTransitState;
+        const currentCity = s.currentCity || getCurrentCityCode();
+        const cachedCityData = currentCity ? s.cache[currentCity] : null;
+
+        if (!hasTransitSource(map) && cachedCityData) {
+            injectLayers(map, cachedCityData);
+        } else {
+            ensureTransitLayerOrder(map);
+            if (canApplyFilters(map)) updateMapFilters(map);
+        }
+    } catch (err) { }
+}
+
+function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
+    const rawHierarchy = {};
+    const linesSet = new Set();
+    const typesSet = new Set();
+    const networksSet = new Set();
+    const lineNameMap = {};
+
+    geojsonData.features.forEach(f => {
+        const p = f.properties || {};
+        const displayName = String(p.route_name || 'Unnamed Line');
+        const type = p.type || "Other";
+        const network = p.network || "Unknown";
+        const geometryType = f.geometry && f.geometry.type ? f.geometry.type : '';
+
+        const uniqueId = `${type}__${network}__${displayName}`;
+
+        p._mod_line_id = uniqueId;
+        f.properties = p;
+        lineNameMap[uniqueId] = displayName;
+
+        if (geometryType.includes('LineString') || p.is_station) {
+            linesSet.add(uniqueId);
+            typesSet.add(type);
+            networksSet.add(getUniqueNetworkId(type, network));
+            if (!rawHierarchy[type]) rawHierarchy[type] = {};
+            if (!rawHierarchy[type][network]) rawHierarchy[type][network] = new Set();
+            rawHierarchy[type][network].add(uniqueId);
+        }
+    });
+
+    const formattedHierarchy = {};
+    for (let t in rawHierarchy) {
+        formattedHierarchy[t] = {};
+        for (let n in rawHierarchy[t]) {
+            formattedHierarchy[t][n] = Array.from(rawHierarchy[t][n]).sort(naturalSort);
+        }
+    }
+
+    const validLines = Array.from(linesSet);
+    const validTypes = Array.from(typesSet);
+    const validNets = Array.from(networksSet);
+
+    const loadedLines = safeLoadArray(`rt_active_lines_${cityCode}`, validLines);
+    const loadedTypes = safeLoadArray(`rt_active_types_${cityCode}`, validTypes);
+    const loadedNets = safeLoadArray(`rt_active_nets_${cityCode}`, validNets);
+
+    const healedLines = loadedLines.filter(line => linesSet.has(line));
+    const healedTypes = loadedTypes.filter(type => typesSet.has(type));
+    const healedNets = loadedNets.filter(net => networksSet.has(net));
+
+    const s = window.RealTransitState;
+    s.currentCity = cityCode;
+    s.lineNames = lineNameMap;
+    s.hierarchy = formattedHierarchy;
+    s.activeLines = healedLines.length > 0 ? healedLines : validLines;
+    s.activeTypes = healedTypes.length > 0 ? healedTypes : validTypes;
+    s.activeNetworks = healedNets.length > 0 ? healedNets : validNets;
+
+    saveCityStateArray(s, 'active_lines', s.activeLines);
+    saveCityStateArray(s, 'active_types', s.activeTypes);
+    saveCityStateArray(s, 'active_nets', s.activeNetworks);
+}
 
 async function updateCityData(map, manualCityCode = null) {
     const cityCode = manualCityCode || window.RealTransitState.currentCity || getCurrentCityCode();
     if (!cityCode) return;
-    if (window.RealTransitState.cache[cityCode]) {
-        injectLayers(map, window.RealTransitState.cache[cityCode]);
+
+    const cached = window.RealTransitState.cache[cityCode];
+    if (cached) {
+        hydrateCityStateFromGeoJson(cityCode, cached);
+        window.dispatchEvent(new CustomEvent('rt_data_loaded'));
+        injectLayers(map, cached);
         return;
     }
 
@@ -449,58 +567,9 @@ async function updateCityData(map, manualCityCode = null) {
 
         if (response.ok) {
             let geojsonData = await response.json();
-            const rawHierarchy = {};
-            const linesSet = new Set();
-            const typesSet = new Set();
-            const networksSet = new Set();
-
-            const lineNameMap = {};
-            geojsonData.features.forEach(f => {
-                const p = f.properties;
-                const displayName = String(p.route_name || 'Unnamed Line');
-                const type = p.type || "Other";
-                const network = p.network || "Unknown";
-
-                // Create unique ID to separate same-named lines from different networks
-                const uniqueId = `${type}__${network}__${displayName}`;
-
-                p._mod_line_id = uniqueId;
-                lineNameMap[uniqueId] = displayName;
-
-                if (f.geometry.type.includes('LineString') || p.is_station) {
-                    linesSet.add(uniqueId);
-                    typesSet.add(type);
-                    networksSet.add(getUniqueNetworkId(type, network));
-                    if (!rawHierarchy[type]) rawHierarchy[type] = {};
-                    if (!rawHierarchy[type][network]) rawHierarchy[type][network] = new Set();
-                    rawHierarchy[type][network].add(uniqueId);
-                }
-            });
-            window.RealTransitState.lineNames = lineNameMap;
-
-            const formattedHierarchy = {};
-            for (let t in rawHierarchy) {
-                formattedHierarchy[t] = {};
-                for (let n in rawHierarchy[t]) {
-                    formattedHierarchy[t][n] = Array.from(rawHierarchy[t][n]).sort(naturalSort);
-                }
-            }
-
-            window.RealTransitState.hierarchy = formattedHierarchy;
-            window.RealTransitState.currentCity = cityCode;
-
-            const savedLines = localStorage.getItem(`rt_active_lines_${cityCode}`);
-            window.RealTransitState.activeLines = savedLines ? JSON.parse(savedLines) : Array.from(linesSet);
-
-            const savedTypes = localStorage.getItem(`rt_active_types_${cityCode}`);
-            window.RealTransitState.activeTypes = savedTypes ? JSON.parse(savedTypes) : Array.from(typesSet);
-
-            const savedNets = localStorage.getItem(`rt_active_nets_${cityCode}`);
-            window.RealTransitState.activeNetworks = savedNets ? JSON.parse(savedNets) : Array.from(networksSet);
-
+            hydrateCityStateFromGeoJson(cityCode, geojsonData);
             window.RealTransitState.cache[cityCode] = geojsonData;
             window.dispatchEvent(new CustomEvent('rt_data_loaded'));
-
             injectLayers(map, geojsonData);
         }
     } catch (e) {
@@ -509,13 +578,13 @@ async function updateCityData(map, manualCityCode = null) {
 }
 
 function injectLayers(map, geojsonData) {
-    if (!map.getSource(SOURCE_ID)) {
+    if (!hasTransitSource(map)) {
         map.addSource(SOURCE_ID, { type: 'geojson', data: geojsonData });
     } else {
         map.getSource(SOURCE_ID).setData(geojsonData);
     }
 
-    if (!map.getLayer(LAYER_ID_LINES)) {
+    if (!hasLinesLayer(map)) {
         map.addLayer({
             id: LAYER_ID_LINES,
             type: 'line',
@@ -523,31 +592,30 @@ function injectLayers(map, geojsonData) {
             layout: { 'line-join': 'round', 'line-cap': 'round' },
             paint: { 'line-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#a855f7'], 'line-width': 3.5, 'line-opacity': 0.8 }
         });
-        if (map.getLayer('road-label')) map.moveLayer(LAYER_ID_LINES, 'road-label');
     }
 
-    if (!map.getLayer(LAYER_ID_STATIONS)) {
+    if (!hasStationsLayer(map)) {
         map.addLayer({
             id: LAYER_ID_STATIONS,
             type: 'circle',
             source: SOURCE_ID,
             paint: { 'circle-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#ffffff'], 'circle-radius': 4.5, 'circle-stroke-width': 2, 'circle-stroke-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#a855f7'] }
         });
-        if (map.getLayer('road-label')) map.moveLayer(LAYER_ID_STATIONS, 'road-label');
     }
 
+    ensureTransitLayerOrder(map);
     updateMapFilters(map);
 }
 
 function updateMapFilters(targetMap = null) {
     const map = targetMap || api.utils.getMap();
-    if (!map || !map.getLayer(LAYER_ID_LINES)) return;
+    if (!map || !canApplyFilters(map)) return;
 
     const s = window.RealTransitState;
 
     if (!s.masterVisible) {
         map.setLayoutProperty(LAYER_ID_LINES, 'visibility', 'none');
-        map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'none');
+        if (hasStationsLayer(map)) map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'none');
         return;
     }
 
@@ -574,14 +642,14 @@ function updateMapFilters(targetMap = null) {
         ['match', ['get', '_mod_line_id'], effectiveActiveLines, true, false]
     ]);
 
-    if (s.stationsVisible) {
+    if (s.stationsVisible && hasStationsLayer(map)) {
         map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'visible');
         map.setFilter(LAYER_ID_STATIONS, [
             'all',
             ['==', ['geometry-type'], 'Point'],
             ['match', ['get', '_mod_line_id'], effectiveActiveLines, true, false]
         ]);
-    } else {
+    } else if (hasStationsLayer(map)) {
         map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'none');
     }
 }
