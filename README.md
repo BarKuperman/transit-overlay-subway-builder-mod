@@ -39,12 +39,16 @@ Once inside a map, a new **Transit Overlay** button will appear in your bottom b
 
 ## 🌍 Included Data
 The mod currently includes transit data for the following cities:
-* **Toronto** (`tor.geojson`)
-* **Paris** (`par.geojson`)
-* **New York City** (`nyc.geojson`)
-* **London** (`lon.geojson`)
-* **Tel Aviv** (`tlv.geojson`)
-* **Seattle** (`sea.geojson`)
+* **Boston** (`bos.geojson`)
 * **Chicago** (`chi.geojson`)
-* **San Francisco Bay Area** (`sf.geojson`)
+* **Dallas** (`dal.geojson`)
+* **London** (`lon.geojson`)
+* **Miami** (`mia.geojson`)
+* **New York City** (`nyc.geojson`)
+* **Paris** (`par.geojson`)
 * **Philadelphia** (`phl.geojson`)
+* **San Francisco Bay Area** (`sf.geojson`)
+* **Seattle** (`sea.geojson`)
+* **Tel Aviv** (`tlv.geojson`)
+* **Toronto** (`tor.geojson`)
+* **Washington D.C.** (`dc.geojson`)
