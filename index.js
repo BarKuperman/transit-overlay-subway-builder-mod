@@ -129,6 +129,121 @@ const getFeatureColor = (feature) => {
     return String(p.colour || p.color || '#9ca3af');
 };
 
+const PANEL_DEFAULT_TOP = 60;
+const PANEL_SIDE_MARGIN = 16;
+const PANEL_BOTTOM_MARGIN = 16;
+const PANEL_COLLISION_GAP = 10;
+const PANEL_DEFAULT_WIDTH = 320;
+const PANEL_MIN_WIDTH = 260;
+const PANEL_MIN_HEIGHT = 220;
+const PANEL_MIN_USABLE_HEIGHT = 260;
+
+const PANEL_COLLISION_SELECTORS = [
+    '[data-testid*="warning" i]',
+    '[class*="warning" i]',
+    '[class*="alert" i]',
+    '[aria-label*="warning" i]',
+    '[title*="warning" i]'
+];
+
+function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function getElementRect(el) {
+    if (!el || !el.isConnected || typeof el.getBoundingClientRect !== 'function') return null;
+    const rect = el.getBoundingClientRect();
+    if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    if (rect.bottom <= 0 || rect.right <= 0) return null;
+    if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return null;
+    return rect;
+}
+
+function getTopRightUiCollisionRects() {
+    const viewportWidth = window.innerWidth || 1280;
+    const viewportHeight = window.innerHeight || 720;
+    const maxTop = Math.min(viewportHeight * 0.45, 320);
+    const minLeft = viewportWidth * 0.55;
+    const seen = new Set();
+    const out = [];
+
+    const addRect = (el) => {
+        const rect = getElementRect(el);
+        if (!rect) return;
+        if (rect.top > maxTop) return;
+        if (rect.right < minLeft) return;
+        const key = `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.right)}:${Math.round(rect.bottom)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(rect);
+    };
+
+    PANEL_COLLISION_SELECTORS.forEach((selector) => {
+        try {
+            document.querySelectorAll(selector).forEach(addRect);
+        } catch (err) { }
+    });
+
+    // Fallback: detect warning row by visible label text in top-right UI.
+    // Include ancestor containers to capture the full warning pill bounds and avoid jitter.
+    try {
+        const candidates = document.querySelectorAll('button, div, span, label');
+        for (let i = 0; i < candidates.length; i += 1) {
+            const el = candidates[i];
+            const text = (el.textContent || '').trim().toLowerCase();
+            if (text === 'warnings' || text === 'warning' || text.startsWith('warnings ')) {
+                addRect(el);
+                let ancestor = el.parentElement;
+                let depth = 0;
+                while (ancestor && depth < 6) {
+                    addRect(ancestor);
+                    const rect = getElementRect(ancestor);
+                    if (rect && rect.width >= 160 && rect.height >= 28 && rect.height <= 120) break;
+                    ancestor = ancestor.parentElement;
+                    depth += 1;
+                }
+            }
+        }
+    } catch (err) { }
+
+    return out;
+}
+
+function computePanelLayout() {
+    const viewportWidth = window.innerWidth || 1280;
+    const viewportHeight = window.innerHeight || 720;
+    const panelWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_DEFAULT_WIDTH, viewportWidth - 24));
+
+    let top = PANEL_DEFAULT_TOP;
+    let left = null;
+    let right = PANEL_SIDE_MARGIN;
+
+    const rightRect = {
+        left: viewportWidth - right - panelWidth,
+        right: viewportWidth - right,
+        top,
+        bottom: top + PANEL_MIN_HEIGHT
+    };
+
+    const collisionRects = getTopRightUiCollisionRects();
+    const collidingRects = collisionRects.filter((rect) => rectsOverlap(rightRect, rect));
+    if (collidingRects.length > 0) {
+        const maxBottom = Math.max(...collidingRects.map((rect) => rect.bottom));
+        top = Math.max(top, Math.ceil(maxBottom + PANEL_COLLISION_GAP));
+    }
+
+    let maxHeight = Math.max(PANEL_MIN_HEIGHT, viewportHeight - top - PANEL_BOTTOM_MARGIN);
+    if (maxHeight < PANEL_MIN_USABLE_HEIGHT) {
+        left = PANEL_SIDE_MARGIN;
+        right = null;
+        top = PANEL_DEFAULT_TOP;
+        maxHeight = Math.max(PANEL_MIN_HEIGHT, viewportHeight - top - PANEL_BOTTOM_MARGIN);
+    }
+
+    return { top, left, right, width: panelWidth, maxHeight };
+}
+
 function escapeHtml(value) {
     return String(value || '')
         .replaceAll('&', '&amp;')
@@ -612,6 +727,7 @@ api.hooks.onGameInit(() => {
         const [isOpen, setIsOpen] = React.useState(false);
         const [trigger, setTriggerRender] = React.useState(0);
         const [expandedGroups, setExpandedGroups] = React.useState({});
+        const [panelLayout, setPanelLayout] = React.useState(() => computePanelLayout());
 
         // Sync with global state events (optional, but good for persistence/other triggers)
         React.useEffect(() => {
@@ -633,6 +749,63 @@ api.hooks.onGameInit(() => {
         };
 
         const s = window.RealTransitState;
+
+        React.useEffect(() => {
+            if (!isOpen) return;
+
+            let frameToken = null;
+            let latePassA = null;
+            let latePassB = null;
+            let observer = null;
+
+            const applyLayout = () => {
+                setPanelLayout((prev) => {
+                    const next = computePanelLayout();
+                    if (
+                        prev.top === next.top
+                        && prev.left === next.left
+                        && prev.right === next.right
+                        && prev.width === next.width
+                        && prev.maxHeight === next.maxHeight
+                    ) {
+                        return prev;
+                    }
+                    return next;
+                });
+            };
+
+            const scheduleApplyLayout = () => {
+                if (frameToken !== null) return;
+                frameToken = window.requestAnimationFrame(() => {
+                    frameToken = null;
+                    applyLayout();
+                });
+            };
+
+            applyLayout();
+            window.addEventListener('resize', scheduleApplyLayout);
+            latePassA = window.setTimeout(scheduleApplyLayout, 120);
+            latePassB = window.setTimeout(scheduleApplyLayout, 420);
+
+            const observeRoot = document.body || document.documentElement;
+            if (observeRoot && typeof MutationObserver !== 'undefined') {
+                observer = new MutationObserver(scheduleApplyLayout);
+                observer.observe(observeRoot, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
+                });
+            }
+
+            return () => {
+                window.removeEventListener('resize', scheduleApplyLayout);
+                if (frameToken !== null) window.cancelAnimationFrame(frameToken);
+                if (latePassA !== null) window.clearTimeout(latePassA);
+                if (latePassB !== null) window.clearTimeout(latePassB);
+                if (observer) observer.disconnect();
+            };
+        }, [isOpen]);
 
         // Sync global state to local if changed elsewhere (unlikely now, but safe)
         if (s.overlayOpen !== isOpen) s.overlayOpen = isOpen;
@@ -939,11 +1112,16 @@ api.hooks.onGameInit(() => {
 
         // Main Panel Component
         const panel = isOpen ? h(Card, {
-            // Card Container: Use explicit styles for layout/scroll handling
-            // Ensure panel fits within screen height with calculated max-height
-            // Using explicit style to force constraints
-            style: { maxHeight: 'calc(100vh - 245px)', display: 'flex', flexDirection: 'column' },
-            className: 'fixed top-[60px] right-4 w-[320px] z-[99999] pointer-events-auto bg-primary-foreground/80 backdrop-blur-sm border border-border/50 rounded-lg shadow-lg overflow-hidden',
+            style: {
+                top: `${panelLayout.top}px`,
+                left: panelLayout.left !== null ? `${panelLayout.left}px` : 'auto',
+                right: panelLayout.right !== null ? `${panelLayout.right}px` : 'auto',
+                width: `${panelLayout.width}px`,
+                maxHeight: `${panelLayout.maxHeight}px`,
+                display: 'flex',
+                flexDirection: 'column'
+            },
+            className: 'fixed z-[2500] pointer-events-auto bg-primary-foreground/80 backdrop-blur-sm border border-border/50 rounded-lg shadow-lg overflow-hidden',
         }, [
             // 1. Fixed Header Section (Toggles)
             h('div', { className: 'p-3 border-b border-gray-500/20 flex-none bg-inherit' }, [
@@ -1380,7 +1558,5 @@ function getCurrentCityCode() {
     });
     return closest ? closest.code : null;
 }
-
-
 
 
