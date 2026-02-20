@@ -5,11 +5,15 @@ const getUniqueNetworkId = (type, net) => `${type}__${net}`;
 const naturalSort = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare;
 
 const LAYER_ID_LINES = 'real-transit-lines';
+const LAYER_ID_LINES_HOVER = 'real-transit-lines-hover';
 const LAYER_ID_STATIONS = 'real-transit-stations';
 const SOURCE_ID = 'real-transit-source';
+const STATION_CLUSTER_RADIUS_PX = 14;
+const LINE_CANDIDATE_RADIUS_PX = 8;
 
 const hasTransitSource = (map) => !!(map && map.getSource && map.getSource(SOURCE_ID));
 const hasLinesLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_LINES));
+const hasLinesHoverLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_LINES_HOVER));
 const hasStationsLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_STATIONS));
 const canApplyFilters = (map) => hasTransitSource(map) && hasLinesLayer(map);
 
@@ -28,8 +32,449 @@ window.RealTransitState = {
     missingDataCities: new Set(),
     missingDataLoggedCities: new Set(),
     loadRequestSeq: 0,
-    uiRegistered: false
+    uiRegistered: false,
+    hover: {
+        mode: null,
+        lineCandidates: [],
+        lineIndex: 0,
+        activeLineId: null,
+        pinned: false,
+        popup: null,
+        domTooltip: null,
+        lastLngLat: null,
+        lastPoint: null,
+        handlersBound: false,
+        keydownHandler: null,
+        mapRef: null
+    }
 };
+
+const normalizeStationName = (rawName) => String(rawName || '').trim().toLowerCase();
+
+const getFeatureStationName = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    return String(p.station_name || p.name || '').trim();
+};
+
+const getFeatureLineId = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    return p._mod_line_id || null;
+};
+
+const getFeatureRouteName = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    return String(p.route_name || 'Unnamed Line');
+};
+
+const getFeatureType = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    return String(p.type || 'Other');
+};
+
+const getFeatureNetwork = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    return String(p.network || 'Unknown');
+};
+
+const getFeatureColor = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    return String(p.colour || p.color || '#9ca3af');
+};
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function getPopupCtor() {
+    if (window.mapboxgl && window.mapboxgl.Popup) return window.mapboxgl.Popup;
+    if (window.maplibregl && window.maplibregl.Popup) return window.maplibregl.Popup;
+    if (api && api.utils && api.utils.mapboxgl && api.utils.mapboxgl.Popup) return api.utils.mapboxgl.Popup;
+    if (api && api.utils && api.utils.maplibregl && api.utils.maplibregl.Popup) return api.utils.maplibregl.Popup;
+    return null;
+}
+
+function clearHoverHighlight(map) {
+    if (!map || !hasLinesHoverLayer(map)) return;
+    map.setFilter(LAYER_ID_LINES_HOVER, ['==', ['get', '_mod_line_id'], '__NONE__']);
+}
+
+function applyHoverHighlight(map, lineId) {
+    if (!map || !hasLinesHoverLayer(map)) return;
+    const targetId = lineId || '__NONE__';
+    map.setFilter(LAYER_ID_LINES_HOVER, ['==', ['get', '_mod_line_id'], targetId]);
+}
+
+function ensureHoverPopup(map) {
+    const s = window.RealTransitState;
+    const hoverState = s.hover;
+    if (hoverState.popup) return hoverState.popup;
+    const PopupCtor = getPopupCtor();
+    if (!PopupCtor) return null;
+    hoverState.popup = new PopupCtor({
+        closeButton: false,
+        closeOnClick: false,
+        maxWidth: '320px',
+        offset: 12
+    });
+    return hoverState.popup;
+}
+
+function ensureHoverDomTooltip() {
+    const hoverState = window.RealTransitState.hover;
+    if (hoverState.domTooltip && hoverState.domTooltip.isConnected) return hoverState.domTooltip;
+    const el = document.createElement('div');
+    el.setAttribute('data-rt-hover-tooltip', 'true');
+    el.style.position = 'fixed';
+    el.style.zIndex = '999999';
+    el.style.pointerEvents = 'none';
+    el.style.background = 'rgba(10, 10, 10, 0.92)';
+    el.style.color = '#fff';
+    el.style.border = '1px solid rgba(255,255,255,0.2)';
+    el.style.borderRadius = '6px';
+    el.style.padding = '8px 10px';
+    el.style.maxWidth = '320px';
+    el.style.fontFamily = 'sans-serif';
+    el.style.boxShadow = '0 8px 24px rgba(0,0,0,.35)';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    hoverState.domTooltip = el;
+    return el;
+}
+
+function setTooltipContentAndPosition(map, lngLat, point, html) {
+    const hoverState = window.RealTransitState.hover;
+    hoverState.lastLngLat = lngLat || null;
+    hoverState.lastPoint = point || null;
+
+    const popup = ensureHoverPopup(map);
+    if (popup) {
+        popup.setLngLat(lngLat).setHTML(html).addTo(map);
+        if (hoverState.domTooltip) hoverState.domTooltip.style.display = 'none';
+        return;
+    }
+
+    const tooltip = ensureHoverDomTooltip();
+    tooltip.innerHTML = html;
+    const x = point && typeof point.x === 'number' ? point.x + 14 : 12;
+    const y = point && typeof point.y === 'number' ? point.y + 14 : 12;
+    tooltip.style.left = `${x}px`;
+    tooltip.style.top = `${y}px`;
+    tooltip.style.display = 'block';
+}
+
+function clearHoverState(map, shouldRemovePopup = true, force = false) {
+    const hoverState = window.RealTransitState.hover;
+    if (hoverState.pinned && !force) return;
+    hoverState.mode = null;
+    hoverState.lineCandidates = [];
+    hoverState.lineIndex = 0;
+    hoverState.activeLineId = null;
+    hoverState.pinned = false;
+    hoverState.lastLngLat = null;
+    hoverState.lastPoint = null;
+    if (shouldRemovePopup && hoverState.popup) hoverState.popup.remove();
+    if (hoverState.domTooltip) hoverState.domTooltip.style.display = 'none';
+    if (map && map.getCanvas) map.getCanvas().style.cursor = '';
+    clearHoverHighlight(map);
+}
+
+function renderLineHoverPopup(map, lngLat, point) {
+    const hoverState = window.RealTransitState.hover;
+    const total = hoverState.lineCandidates.length;
+    if (total === 0) {
+        clearHoverState(map);
+        return;
+    }
+
+    const index = ((hoverState.lineIndex % total) + total) % total;
+    hoverState.lineIndex = index;
+    const active = hoverState.lineCandidates[index];
+    hoverState.activeLineId = active.lineId;
+    hoverState.mode = 'line';
+
+    const cycleHint = total > 1
+        ? `<div style="font-size:10px;opacity:.7;margin-top:4px;">${index + 1}/${total} · Press Tab to cycle</div>`
+        : '';
+    const pinnedHint = hoverState.pinned
+        ? `<div style="font-size:10px;opacity:.72;margin-top:2px;">Pinned - Click anywhere to close</div>`
+        : '';
+
+    const html = `
+        <div style="font-size:12px;line-height:1.35;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+                <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;opacity:.72;">Line</div>
+                <span style="
+                    width:14px;
+                    height:14px;
+                    min-width:14px;
+                    border-radius:999px;
+                    background:${escapeHtml(active.color || '#9ca3af')};
+                    border:1px solid rgba(255,255,255,.5);
+                    margin-top:1px;
+                "></span>
+            </div>
+            <div style="margin-top:2px;font-size:18px;font-weight:800;line-height:1.15;">${escapeHtml(active.routeName)}</div>
+            <div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.18);">
+                <div><strong>Type:</strong> ${escapeHtml(active.type)}</div>
+                <div><strong>Network:</strong> ${escapeHtml(active.network)}</div>
+                ${cycleHint}
+                ${pinnedHint}
+            </div>
+        </div>
+    `;
+
+    setTooltipContentAndPosition(map, lngLat, point, html);
+    applyHoverHighlight(map, active.lineId);
+    if (map.getCanvas) map.getCanvas().style.cursor = 'pointer';
+}
+
+function renderStationHoverPopup(map, lngLat, point, stationName, stationLines) {
+    const title = stationName || 'Station';
+    const lineChips = stationLines.length > 0
+        ? stationLines.map(line => `
+            <span style="
+                display:inline-flex;
+                align-items:center;
+                max-width:100%;
+                padding:2px 8px;
+                border-radius:999px;
+                border:1px solid rgba(255,255,255,.22);
+                background:rgba(255,255,255,.08);
+                font-size:12px;
+                font-weight:600;
+                line-height:1.2;
+                white-space:nowrap;
+                overflow:hidden;
+                text-overflow:ellipsis;
+                color:#fff;
+            ">
+                <span style="
+                    width:12px;
+                    height:12px;
+                    min-width:12px;
+                    border-radius:999px;
+                    background:${escapeHtml(line.color || '#9ca3af')};
+                    border:1px solid rgba(255,255,255,.5);
+                    margin-right:8px;
+                "></span>
+                <span>${escapeHtml(line.routeName)}</span>
+            </span>
+        `).join('')
+        : `<span style="
+            display:inline-flex;
+            align-items:center;
+            padding:2px 8px;
+            border-radius:999px;
+            border:1px solid rgba(255,255,255,.22);
+            background:rgba(255,255,255,.08);
+            font-size:12px;
+            font-weight:600;
+            line-height:1.2;
+        ">Unknown line</span>`;
+    const html = `
+        <div style="font-size:12px;line-height:1.35;">
+            <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;opacity:.72;">Station</div>
+            <div style="margin-top:2px;font-size:18px;font-weight:800;line-height:1.15;">${escapeHtml(title)}</div>
+            <div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.18);font-weight:700;">Lines serving this station:</div>
+            <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${lineChips}</div>
+        </div>
+    `;
+    setTooltipContentAndPosition(map, lngLat, point, html);
+    if (map.getCanvas) map.getCanvas().style.cursor = 'pointer';
+}
+
+function getStationClusterFeatures(map, event, seedFeature) {
+    if (!map || !map.queryRenderedFeatures || !hasStationsLayer(map) || !seedFeature || !seedFeature.geometry || !seedFeature.geometry.coordinates) return [];
+
+    const seedNameNormalized = normalizeStationName(getFeatureStationName(seedFeature));
+    const seedPoint = map.project(event.lngLat);
+    const minPoint = { x: event.point.x - STATION_CLUSTER_RADIUS_PX, y: event.point.y - STATION_CLUSTER_RADIUS_PX };
+    const maxPoint = { x: event.point.x + STATION_CLUSTER_RADIUS_PX, y: event.point.y + STATION_CLUSTER_RADIUS_PX };
+    let nearby = [];
+    try {
+        nearby = map.queryRenderedFeatures([minPoint, maxPoint], { layers: [LAYER_ID_STATIONS] }) || [];
+    } catch (err) {
+        nearby = [];
+    }
+
+    return nearby.filter(feature => {
+        if (!feature || !feature.geometry || feature.geometry.type !== 'Point') return false;
+        const coords = feature.geometry.coordinates;
+        if (!Array.isArray(coords) || coords.length < 2) return false;
+
+        const p = map.project({ lng: coords[0], lat: coords[1] });
+        const dx = p.x - seedPoint.x;
+        const dy = p.y - seedPoint.y;
+        if ((dx * dx + dy * dy) > (STATION_CLUSTER_RADIUS_PX * STATION_CLUSTER_RADIUS_PX)) return false;
+
+        const candidateNameNormalized = normalizeStationName(getFeatureStationName(feature));
+        if (seedNameNormalized) return candidateNameNormalized === seedNameNormalized;
+        return true;
+    });
+}
+
+function onTransitHoverMove(map, event) {
+    if (!map || !event || !event.point || !event.lngLat) return;
+    const s = window.RealTransitState;
+    const hoverState = s.hover;
+    if (!s.overlayOpen) {
+        clearHoverState(map, true, true);
+        return;
+    }
+    if (!s.masterVisible) {
+        clearHoverState(map, true, true);
+        return;
+    }
+    if (hoverState.pinned) return;
+
+    const hasStations = s.stationsVisible && hasStationsLayer(map);
+    const hasLines = hasLinesLayer(map);
+    if (!hasStations && !hasLines) {
+        clearHoverState(map);
+        return;
+    }
+
+    let pointFeatures = [];
+    try {
+        const pointLayers = [];
+        if (hasStations) pointLayers.push(LAYER_ID_STATIONS);
+        if (hasLines) pointLayers.push(LAYER_ID_LINES);
+        pointFeatures = map.queryRenderedFeatures(event.point, { layers: pointLayers }) || [];
+    } catch (err) {
+        clearHoverState(map);
+        return;
+    }
+    const stationFeatures = pointFeatures.filter(f => f.layer && f.layer.id === LAYER_ID_STATIONS);
+
+    if (stationFeatures.length > 0) {
+        const seed = stationFeatures[0];
+        const cluster = getStationClusterFeatures(map, event, seed);
+        const stationName = getFeatureStationName(seed);
+        const stationLinesById = new Map();
+
+        cluster.forEach(feature => {
+            const lineId = getFeatureLineId(feature);
+            if (!lineId || stationLinesById.has(lineId)) return;
+            stationLinesById.set(lineId, {
+                lineId,
+                routeName: getFeatureRouteName(feature),
+                color: getFeatureColor(feature)
+            });
+        });
+
+        const stationLines = Array.from(stationLinesById.values()).sort((a, b) => naturalSort(a.routeName, b.routeName));
+        hoverState.mode = 'station';
+        hoverState.lineCandidates = [];
+        hoverState.lineIndex = 0;
+        hoverState.activeLineId = null;
+        renderStationHoverPopup(map, event.lngLat, event.point, stationName || 'Station', stationLines);
+        clearHoverHighlight(map);
+        return;
+    }
+
+    let lineFeatures = [];
+    if (hasLines) {
+        const minPoint = { x: event.point.x - LINE_CANDIDATE_RADIUS_PX, y: event.point.y - LINE_CANDIDATE_RADIUS_PX };
+        const maxPoint = { x: event.point.x + LINE_CANDIDATE_RADIUS_PX, y: event.point.y + LINE_CANDIDATE_RADIUS_PX };
+        try {
+            lineFeatures = map.queryRenderedFeatures([minPoint, maxPoint], { layers: [LAYER_ID_LINES] }) || [];
+        } catch (err) {
+            lineFeatures = [];
+        }
+    }
+
+    if (lineFeatures.length > 0) {
+        const lineCandidatesById = new Map();
+        lineFeatures.forEach(feature => {
+            const lineId = getFeatureLineId(feature);
+            if (!lineId || lineCandidatesById.has(lineId)) return;
+            lineCandidatesById.set(lineId, {
+                lineId,
+                routeName: getFeatureRouteName(feature),
+                type: getFeatureType(feature),
+                network: getFeatureNetwork(feature),
+                color: getFeatureColor(feature)
+            });
+        });
+
+        const candidates = Array.from(lineCandidatesById.values()).sort((a, b) => {
+            const byName = naturalSort(a.routeName, b.routeName);
+            if (byName !== 0) return byName;
+            return naturalSort(a.lineId, b.lineId);
+        });
+        const previousActiveId = hoverState.activeLineId;
+        hoverState.lineCandidates = candidates;
+        const existingIdx = previousActiveId ? candidates.findIndex(c => c.lineId === previousActiveId) : -1;
+        hoverState.lineIndex = existingIdx >= 0 ? existingIdx : 0;
+        renderLineHoverPopup(map, event.lngLat, event.point);
+        return;
+    }
+
+    clearHoverState(map);
+}
+
+function onTransitHoverKeydown(event) {
+    const s = window.RealTransitState;
+    const hoverState = window.RealTransitState.hover;
+    if (!s.overlayOpen) return;
+    if (!hoverState || hoverState.mode !== 'line') return;
+    if (event.key !== 'Tab') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    if (!hoverState.lineCandidates || hoverState.lineCandidates.length <= 1) return;
+
+    const map = hoverState.mapRef || api.utils.getMap();
+    if (!map) return;
+    hoverState.lineIndex = (hoverState.lineIndex + 1) % hoverState.lineCandidates.length;
+
+    if (hoverState.lastLngLat) {
+        renderLineHoverPopup(map, hoverState.lastLngLat, hoverState.lastPoint);
+    }
+}
+
+function onTransitHoverClick(map, event) {
+    const s = window.RealTransitState;
+    const hoverState = window.RealTransitState.hover;
+    if (!hoverState) return;
+    if (!s.overlayOpen) return;
+
+    if (hoverState.pinned) {
+        clearHoverState(map, true, true);
+        return;
+    }
+
+    if (hoverState.mode !== 'line' || !hoverState.lineCandidates || hoverState.lineCandidates.length === 0) return;
+    hoverState.pinned = true;
+    if (event && event.lngLat) hoverState.lastLngLat = event.lngLat;
+    if (event && event.point) hoverState.lastPoint = event.point;
+
+    if (hoverState.lastLngLat) {
+        renderLineHoverPopup(map, hoverState.lastLngLat, hoverState.lastPoint);
+    }
+}
+
+function ensureHoverInteractions(map) {
+    const hoverState = window.RealTransitState.hover;
+    if (!map || hoverState.handlersBound) return;
+
+    map.on('mousemove', (event) => onTransitHoverMove(map, event));
+    map.on('click', (event) => onTransitHoverClick(map, event));
+    map.on('mouseout', () => clearHoverState(map));
+    if (map.getCanvas && map.getCanvas()) {
+        map.getCanvas().addEventListener('mouseleave', () => clearHoverState(map));
+    }
+
+    hoverState.keydownHandler = onTransitHoverKeydown;
+    window.addEventListener('keydown', hoverState.keydownHandler);
+    hoverState.handlersBound = true;
+    hoverState.mapRef = map;
+}
 
 function registerOverlayUiComponent() {
     if (window.RealTransitState.uiRegistered) return;
@@ -92,6 +537,10 @@ api.hooks.onGameInit(() => {
             const newState = !isOpen;
             setIsOpen(newState);
             window.RealTransitState.overlayOpen = newState;
+            if (!newState) {
+                const map = api.utils.getMap();
+                clearHoverState(map || null, true, true);
+            }
         };
 
         const s = window.RealTransitState;
@@ -466,12 +915,24 @@ api.hooks.onCityLoad((cityCode) => {
 
 api.hooks.onMapReady((map) => {
     registerOverlayUiComponent();
+    ensureHoverInteractions(map);
     map.on('styledata', () => handleStyleDataRefresh(map));
     handleStyleDataRefresh(map);
 });
 
 api.hooks.onGameEnd(() => {
-    window.RealTransitState.uiRegistered = false;
+    const s = window.RealTransitState;
+    s.uiRegistered = false;
+    if (s.hover && s.hover.keydownHandler) {
+        window.removeEventListener('keydown', s.hover.keydownHandler);
+        s.hover.keydownHandler = null;
+    }
+    if (s.hover) {
+        s.hover.handlersBound = false;
+        s.hover.mapRef = null;
+        if (s.hover.popup) s.hover.popup.remove();
+        s.hover.popup = null;
+    }
 });
 
 function safelyMoveLayer(map, layerId, beforeLayerId = null) {
@@ -486,6 +947,7 @@ function safelyMoveLayer(map, layerId, beforeLayerId = null) {
 function ensureTransitLayerOrder(map) {
     if (!map) return;
     safelyMoveLayer(map, LAYER_ID_LINES, 'road-label');
+    safelyMoveLayer(map, LAYER_ID_LINES_HOVER, 'road-label');
     safelyMoveLayer(map, LAYER_ID_STATIONS, 'road-label');
 }
 
@@ -501,7 +963,11 @@ function handleStyleDataRefresh(map) {
             injectLayers(map, cachedCityData);
         } else {
             ensureTransitLayerOrder(map);
-            if (canApplyFilters(map)) updateMapFilters(map);
+            if (canApplyFilters(map)) {
+                updateMapFilters(map);
+                const activeLineId = window.RealTransitState.hover.activeLineId;
+                applyHoverHighlight(map, activeLineId);
+            }
         }
     } catch (err) { }
 }
@@ -705,6 +1171,21 @@ function injectLayers(map, geojsonData) {
         });
     }
 
+    if (!hasLinesHoverLayer(map)) {
+        map.addLayer({
+            id: LAYER_ID_LINES_HOVER,
+            type: 'line',
+            source: SOURCE_ID,
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            filter: ['==', ['get', '_mod_line_id'], '__NONE__'],
+            paint: {
+                'line-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#ffffff'],
+                'line-width': 7,
+                'line-opacity': 0.95
+            }
+        });
+    }
+
     if (!hasStationsLayer(map)) {
         map.addLayer({
             id: LAYER_ID_STATIONS,
@@ -716,6 +1197,7 @@ function injectLayers(map, geojsonData) {
 
     ensureTransitLayerOrder(map);
     updateMapFilters(map);
+    applyHoverHighlight(map, window.RealTransitState.hover.activeLineId);
 }
 
 function updateMapFilters(targetMap = null) {
@@ -726,7 +1208,9 @@ function updateMapFilters(targetMap = null) {
 
     if (!s.masterVisible) {
         map.setLayoutProperty(LAYER_ID_LINES, 'visibility', 'none');
+        if (hasLinesHoverLayer(map)) map.setLayoutProperty(LAYER_ID_LINES_HOVER, 'visibility', 'none');
         if (hasStationsLayer(map)) map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'none');
+        clearHoverState(map, true, true);
         return;
     }
 
@@ -752,6 +1236,9 @@ function updateMapFilters(targetMap = null) {
         ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'MultiLineString']],
         ['match', ['get', '_mod_line_id'], effectiveActiveLines, true, false]
     ]);
+    if (hasLinesHoverLayer(map)) {
+        map.setLayoutProperty(LAYER_ID_LINES_HOVER, 'visibility', 'visible');
+    }
 
     if (s.stationsVisible && hasStationsLayer(map)) {
         map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'visible');
@@ -762,6 +1249,13 @@ function updateMapFilters(targetMap = null) {
         ]);
     } else if (hasStationsLayer(map)) {
         map.setLayoutProperty(LAYER_ID_STATIONS, 'visibility', 'none');
+    }
+
+    const hoverState = s.hover;
+    if (hoverState.mode === 'line' && hoverState.activeLineId) {
+        applyHoverHighlight(map, hoverState.activeLineId);
+    } else {
+        clearHoverHighlight(map);
     }
 }
 
