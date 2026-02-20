@@ -130,7 +130,7 @@ const getFeatureColor = (feature) => {
 };
 
 const PANEL_DEFAULT_TOP = 60;
-const PANEL_SIDE_MARGIN = 16;
+const PANEL_SIDE_MARGIN = 22;
 const PANEL_BOTTOM_MARGIN = 16;
 const PANEL_COLLISION_GAP = 10;
 const PANEL_DEFAULT_WIDTH = 320;
@@ -145,10 +145,6 @@ const PANEL_COLLISION_SELECTORS = [
     '[aria-label*="warning" i]',
     '[title*="warning" i]'
 ];
-
-function rectsOverlap(a, b) {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
 
 function getElementRect(el) {
     if (!el || !el.isConnected || typeof el.getBoundingClientRect !== 'function') return null;
@@ -167,6 +163,13 @@ function getTopRightUiCollisionRects() {
     const minLeft = viewportWidth * 0.55;
     const seen = new Set();
     const out = [];
+    const isLikelyWarningRowRect = (rect) => (
+        !!rect
+        && rect.width >= 120
+        && rect.width <= Math.min(900, viewportWidth * 0.95)
+        && rect.height >= 20
+        && rect.height <= 140
+    );
 
     const addRect = (el) => {
         const rect = getElementRect(el);
@@ -181,28 +184,23 @@ function getTopRightUiCollisionRects() {
 
     PANEL_COLLISION_SELECTORS.forEach((selector) => {
         try {
-            document.querySelectorAll(selector).forEach(addRect);
+            document.querySelectorAll(selector).forEach((el) => {
+                const rect = getElementRect(el);
+                if (!isLikelyWarningRowRect(rect)) return;
+                addRect(el);
+            });
         } catch (err) { }
     });
 
-    // Fallback: detect warning row by visible label text in top-right UI.
-    // Include ancestor containers to capture the full warning pill bounds and avoid jitter.
+    // Fallback: detect visible text nodes that look like the warning row label.
     try {
         const candidates = document.querySelectorAll('button, div, span, label');
         for (let i = 0; i < candidates.length; i += 1) {
             const el = candidates[i];
             const text = (el.textContent || '').trim().toLowerCase();
             if (text === 'warnings' || text === 'warning' || text.startsWith('warnings ')) {
-                addRect(el);
-                let ancestor = el.parentElement;
-                let depth = 0;
-                while (ancestor && depth < 6) {
-                    addRect(ancestor);
-                    const rect = getElementRect(ancestor);
-                    if (rect && rect.width >= 160 && rect.height >= 28 && rect.height <= 120) break;
-                    ancestor = ancestor.parentElement;
-                    depth += 1;
-                }
+                const rect = getElementRect(el);
+                if (isLikelyWarningRowRect(rect)) addRect(el);
             }
         }
     } catch (err) { }
@@ -216,30 +214,18 @@ function computePanelLayout() {
     const panelWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_DEFAULT_WIDTH, viewportWidth - 24));
 
     let top = PANEL_DEFAULT_TOP;
-    let left = null;
-    let right = PANEL_SIDE_MARGIN;
-
-    const rightRect = {
-        left: viewportWidth - right - panelWidth,
-        right: viewportWidth - right,
-        top,
-        bottom: top + PANEL_MIN_HEIGHT
-    };
+    const left = null;
+    const right = PANEL_SIDE_MARGIN;
 
     const collisionRects = getTopRightUiCollisionRects();
-    const collidingRects = collisionRects.filter((rect) => rectsOverlap(rightRect, rect));
-    if (collidingRects.length > 0) {
-        const maxBottom = Math.max(...collidingRects.map((rect) => rect.bottom));
+    if (collisionRects.length > 0) {
+        const maxBottom = Math.max(...collisionRects.map((rect) => rect.bottom));
         top = Math.max(top, Math.ceil(maxBottom + PANEL_COLLISION_GAP));
     }
+    // Safety clamp: keep the panel visible even if detection finds an oversized container.
+    top = Math.min(top, Math.max(PANEL_DEFAULT_TOP, viewportHeight - PANEL_MIN_HEIGHT - PANEL_BOTTOM_MARGIN));
 
-    let maxHeight = Math.max(PANEL_MIN_HEIGHT, viewportHeight - top - PANEL_BOTTOM_MARGIN);
-    if (maxHeight < PANEL_MIN_USABLE_HEIGHT) {
-        left = PANEL_SIDE_MARGIN;
-        right = null;
-        top = PANEL_DEFAULT_TOP;
-        maxHeight = Math.max(PANEL_MIN_HEIGHT, viewportHeight - top - PANEL_BOTTOM_MARGIN);
-    }
+    const maxHeight = Math.max(PANEL_MIN_HEIGHT, viewportHeight - top - PANEL_BOTTOM_MARGIN);
 
     return { top, left, right, width: panelWidth, maxHeight };
 }
@@ -1558,5 +1544,3 @@ function getCurrentCityCode() {
     });
     return closest ? closest.code : null;
 }
-
-
