@@ -1370,7 +1370,12 @@ async function updateCityData(map, manualCityCode = null) {
     s.inFlightLoads.add(cityCode);
     try {
         let modsDir = await window.electron.getModsFolder();
-        const localFileUrl = `file:///${modsDir.replaceAll('\\', '/')}/Transit Overlay/data/${cityCode.toLowerCase()}.geojson`;
+        const filePath = `${modsDir}\\Transit Overlay\\data\\${cityCode.toLowerCase()}.geojson`;
+        const localFileUrl = `file:///${filePath
+            .replaceAll('\\', '/')
+            .split('/')
+            .map(part => encodeURIComponent(part))
+            .join('/')}`;
         const response = await fetch(localFileUrl);
 
         if (response.ok) {
@@ -1404,7 +1409,7 @@ async function updateCityData(map, manualCityCode = null) {
         if (isMissingData) {
             s.missingDataCities.add(cityCode);
             if (!s.missingDataLoggedCities.has(cityCode)) {
-                console.warn(`[Transit Overlay] No local transit data for ${cityCode} (file missing or unsupported city).`);
+                console.warn(`[Transit Overlay] No local transit data for ${cityCode} (file missing or unsupported city). ${filePath}`);
                 s.missingDataLoggedCities.add(cityCode);
             }
             applyNoDataCityState(cityCode, getResolvedMap());
