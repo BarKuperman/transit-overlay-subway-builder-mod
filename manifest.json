@@ -2,7 +2,7 @@
     "id": "com.barku.transit-overlay",
     "name": "Transit Overlay",
     "description": "Overlays real-world railway and subway lines from Open Street Map",
-    "version": "1.2.1",
+    "version": "1.3.0",
     "author": {
 		"name": "Bar Kuperman",
 		"url": "https://github.com/BarKuperman/transit-overlay-subway-builder-mod/tree/main"
