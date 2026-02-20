@@ -11,10 +11,40 @@ const SOURCE_ID = 'real-transit-source';
 const STATION_CLUSTER_RADIUS_PX = 14;
 const LINE_CANDIDATE_RADIUS_PX = 8;
 
-const hasTransitSource = (map) => !!(map && map.getSource && map.getSource(SOURCE_ID));
-const hasLinesLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_LINES));
-const hasLinesHoverLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_LINES_HOVER));
-const hasStationsLayer = (map) => !!(map && map.getLayer && map.getLayer(LAYER_ID_STATIONS));
+const safeGetSource = (map, sourceId) => {
+    if (!map || !map.getSource) return null;
+    try {
+        return map.getSource(sourceId);
+    } catch (e) {
+        return null;
+    }
+};
+
+const safeGetLayer = (map, layerId) => {
+    if (!map || !map.getLayer) return null;
+    try {
+        return map.getLayer(layerId);
+    } catch (e) {
+        return null;
+    }
+};
+
+const isMapStyleReady = (map) => {
+    if (!map || !map.getSource || !map.addSource || !map.getLayer || !map.addLayer) return false;
+    if (typeof map.isStyleLoaded === 'function') {
+        try {
+            if (!map.isStyleLoaded()) return false;
+        } catch (e) {
+            return false;
+        }
+    }
+    return true;
+};
+
+const hasTransitSource = (map) => !!safeGetSource(map, SOURCE_ID);
+const hasLinesLayer = (map) => !!safeGetLayer(map, LAYER_ID_LINES);
+const hasLinesHoverLayer = (map) => !!safeGetLayer(map, LAYER_ID_LINES_HOVER);
+const hasStationsLayer = (map) => !!safeGetLayer(map, LAYER_ID_STATIONS);
 const canApplyFilters = (map) => hasTransitSource(map) && hasLinesLayer(map);
 
 window.RealTransitState = {
@@ -1048,7 +1078,7 @@ function applyNoDataCityState(cityCode, map = null) {
     const resolvedMap = map || api.utils.getMap();
     if (!resolvedMap || !resolvedMap.getSource) return;
 
-    const source = resolvedMap.getSource(SOURCE_ID);
+    const source = safeGetSource(resolvedMap, SOURCE_ID);
     if (source && source.setData) {
         source.setData({ type: 'FeatureCollection', features: [] });
     }
@@ -1150,15 +1180,20 @@ async function updateCityData(map, manualCityCode = null) {
 }
 
 function injectLayers(map, geojsonData) {
-    if (!map || !map.getSource || !map.addSource || !map.getLayer || !map.addLayer) {
+    if (!isMapStyleReady(map)) {
         console.warn('[Transit Overlay] Cannot inject layers: map instance is not ready.');
-        return;
+        return false;
     }
 
     if (!hasTransitSource(map)) {
         map.addSource(SOURCE_ID, { type: 'geojson', data: geojsonData });
     } else {
-        map.getSource(SOURCE_ID).setData(geojsonData);
+        const source = safeGetSource(map, SOURCE_ID);
+        if (!source || !source.setData) {
+            console.warn('[Transit Overlay] Transit source became unavailable; deferring update.');
+            return false;
+        }
+        source.setData(geojsonData);
     }
 
     if (!hasLinesLayer(map)) {
@@ -1198,6 +1233,7 @@ function injectLayers(map, geojsonData) {
     ensureTransitLayerOrder(map);
     updateMapFilters(map);
     applyHoverHighlight(map, window.RealTransitState.hover.activeLineId);
+    return true;
 }
 
 function updateMapFilters(targetMap = null) {
