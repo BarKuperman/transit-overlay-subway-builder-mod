@@ -1,5 +1,17 @@
 const api = window.SubwayBuilderAPI;
 
+if (!window.__TransitOverlayWarnFilterInstalled) {
+    const originalWarn = console.warn ? console.warn.bind(console) : null;
+    console.warn = (...args) => {
+        try {
+            const first = args && args.length > 0 ? String(args[0]) : '';
+            if (first.includes('[Transit Overlay] Cannot inject layers: map instance is not ready.')) return;
+        } catch (e) { }
+        if (originalWarn) originalWarn(...args);
+    };
+    window.__TransitOverlayWarnFilterInstalled = true;
+}
+
 const getUniqueNetworkId = (type, net) => `${type}__${net}`;
 
 const naturalSort = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare;
@@ -10,6 +22,9 @@ const LAYER_ID_STATIONS = 'real-transit-stations';
 const SOURCE_ID = 'real-transit-source';
 const STATION_CLUSTER_RADIUS_PX = 14;
 const LINE_CANDIDATE_RADIUS_PX = 8;
+const MODULE_INSTANCE_ID = `rt_overlay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+window.__RealTransitOverlayModuleId = MODULE_INSTANCE_ID;
+const isActiveModuleInstance = () => window.__RealTransitOverlayModuleId === MODULE_INSTANCE_ID;
 
 const safeGetSource = (map, sourceId) => {
     if (!map || !map.getSource) return null;
@@ -63,18 +78,21 @@ window.RealTransitState = {
     missingDataLoggedCities: new Set(),
     loadRequestSeq: 0,
     uiRegistered: false,
+    injectRetryTimer: null,
     hover: {
         mode: null,
         lineCandidates: [],
         lineIndex: 0,
         activeLineId: null,
         pinned: false,
+        pinActivatedAt: 0,
         popup: null,
         domTooltip: null,
         lastLngLat: null,
         lastPoint: null,
         handlersBound: false,
         keydownHandler: null,
+        globalPointerHandler: null,
         mapRef: null
     }
 };
@@ -205,6 +223,7 @@ function clearHoverState(map, shouldRemovePopup = true, force = false) {
     hoverState.lineIndex = 0;
     hoverState.activeLineId = null;
     hoverState.pinned = false;
+    hoverState.pinActivatedAt = 0;
     hoverState.lastLngLat = null;
     hoverState.lastPoint = null;
     if (shouldRemovePopup && hoverState.popup) hoverState.popup.remove();
@@ -349,6 +368,7 @@ function getStationClusterFeatures(map, event, seedFeature) {
 }
 
 function onTransitHoverMove(map, event) {
+    if (!isActiveModuleInstance()) return;
     if (!map || !event || !event.point || !event.lngLat) return;
     const s = window.RealTransitState;
     const hoverState = s.hover;
@@ -449,9 +469,15 @@ function onTransitHoverMove(map, event) {
 }
 
 function onTransitHoverKeydown(event) {
+    if (!isActiveModuleInstance()) return;
     const s = window.RealTransitState;
     const hoverState = window.RealTransitState.hover;
     if (!s.overlayOpen) return;
+    if (hoverState && hoverState.pinned && event.key !== 'Tab') {
+        const map = hoverState.mapRef || api.utils.getMap();
+        clearHoverState(map || null, true, true);
+        return;
+    }
     if (!hoverState || hoverState.mode !== 'line') return;
     if (event.key !== 'Tab') return;
     event.preventDefault();
@@ -469,6 +495,7 @@ function onTransitHoverKeydown(event) {
 }
 
 function onTransitHoverClick(map, event) {
+    if (!isActiveModuleInstance()) return;
     const s = window.RealTransitState;
     const hoverState = window.RealTransitState.hover;
     if (!hoverState) return;
@@ -481,6 +508,7 @@ function onTransitHoverClick(map, event) {
 
     if (hoverState.mode !== 'line' || !hoverState.lineCandidates || hoverState.lineCandidates.length === 0) return;
     hoverState.pinned = true;
+    hoverState.pinActivatedAt = Date.now();
     if (event && event.lngLat) hoverState.lastLngLat = event.lngLat;
     if (event && event.point) hoverState.lastPoint = event.point;
 
@@ -502,6 +530,23 @@ function ensureHoverInteractions(map) {
 
     hoverState.keydownHandler = onTransitHoverKeydown;
     window.addEventListener('keydown', hoverState.keydownHandler);
+    hoverState.globalPointerHandler = (event) => {
+        if (!isActiveModuleInstance()) return;
+        const s = window.RealTransitState;
+        const hs = s.hover;
+        if (!hs.pinned) return;
+        if ((Date.now() - hs.pinActivatedAt) < 120) return;
+        const activeMap = hs.mapRef || map;
+        const target = event && event.target ? event.target : null;
+        if (activeMap && target) {
+            const canvas = activeMap.getCanvas ? activeMap.getCanvas() : null;
+            const canvasContainer = canvas && canvas.parentElement ? canvas.parentElement : null;
+            if (canvas && (target === canvas || canvas.contains(target))) return;
+            if (canvasContainer && (target === canvasContainer || canvasContainer.contains(target))) return;
+        }
+        clearHoverState(map, true, true);
+    };
+    window.addEventListener('pointerdown', hoverState.globalPointerHandler, true);
     hoverState.handlersBound = true;
     hoverState.mapRef = map;
 }
@@ -514,6 +559,20 @@ function registerOverlayUiComponent() {
         component: window.RealTransitOverlayComponent
     });
     window.RealTransitState.uiRegistered = true;
+}
+
+function scheduleDeferredLayerRefresh(delayMs = 300) {
+    const s = window.RealTransitState;
+    if (s.injectRetryTimer) return;
+    s.injectRetryTimer = window.setTimeout(() => {
+        s.injectRetryTimer = null;
+        const retryMap = api.utils.getMap();
+        if (!retryMap) {
+            scheduleDeferredLayerRefresh(delayMs);
+            return;
+        }
+        handleStyleDataRefresh(retryMap);
+    }, delayMs);
 }
 
 function safeLoadArray(key, fallback = []) {
@@ -940,6 +999,7 @@ api.hooks.onGameInit(() => {
 api.hooks.onCityLoad((cityCode) => {
     window.RealTransitState.currentCity = cityCode;
     const map = api.utils.getMap();
+    clearHoverState(map || null, true, true);
     updateCityData(map || null, cityCode);
 });
 
@@ -948,6 +1008,11 @@ api.hooks.onMapReady((map) => {
     ensureHoverInteractions(map);
     map.on('styledata', () => handleStyleDataRefresh(map));
     handleStyleDataRefresh(map);
+    const s = window.RealTransitState;
+    const fallbackCity = s.currentCity || getCurrentCityCode();
+    if (fallbackCity && !s.cache[fallbackCity]) {
+        updateCityData(map, fallbackCity);
+    }
 });
 
 api.hooks.onGameEnd(() => {
@@ -956,6 +1021,10 @@ api.hooks.onGameEnd(() => {
     if (s.hover && s.hover.keydownHandler) {
         window.removeEventListener('keydown', s.hover.keydownHandler);
         s.hover.keydownHandler = null;
+    }
+    if (s.hover && s.hover.globalPointerHandler) {
+        window.removeEventListener('pointerdown', s.hover.globalPointerHandler, true);
+        s.hover.globalPointerHandler = null;
     }
     if (s.hover) {
         s.hover.handlersBound = false;
@@ -984,13 +1053,17 @@ function ensureTransitLayerOrder(map) {
 function handleStyleDataRefresh(map) {
     try {
         const s = window.RealTransitState;
-        const currentCity = s.currentCity;
+        const currentCity = s.currentCity || getCurrentCityCode();
         if (!currentCity) return;
+        s.currentCity = currentCity;
         const cachedCityData = s.cache[currentCity];
-        if (!cachedCityData) return;
+        if (!cachedCityData) {
+            updateCityData(map, currentCity);
+            return;
+        }
 
         if (!hasTransitSource(map)) {
-            injectLayers(map, cachedCityData);
+            if (!injectLayers(map, cachedCityData)) scheduleDeferredLayerRefresh();
         } else {
             ensureTransitLayerOrder(map);
             if (canApplyFilters(map)) {
@@ -1116,9 +1189,9 @@ async function updateCityData(map, manualCityCode = null) {
         window.dispatchEvent(new CustomEvent('rt_data_loaded'));
         const resolvedMap = getResolvedMap();
         if (resolvedMap) {
-            injectLayers(resolvedMap, cached);
+            if (!injectLayers(resolvedMap, cached)) scheduleDeferredLayerRefresh();
         } else {
-            console.warn(`[Transit Overlay] Map is not ready yet; deferred layer injection for ${cityCode}.`);
+            scheduleDeferredLayerRefresh();
         }
         if (
             manualCityCode &&
@@ -1147,9 +1220,9 @@ async function updateCityData(map, manualCityCode = null) {
             window.dispatchEvent(new CustomEvent('rt_data_loaded'));
             const resolvedMap = getResolvedMap();
             if (resolvedMap) {
-                injectLayers(resolvedMap, geojsonData);
+                if (!injectLayers(resolvedMap, geojsonData)) scheduleDeferredLayerRefresh();
             } else {
-                console.warn(`[Transit Overlay] Map is not ready yet; deferred layer injection for ${cityCode}.`);
+                scheduleDeferredLayerRefresh();
             }
             console.info(`[Transit Overlay] Loaded transit data for ${cityCode} from file.`);
         } else {
@@ -1181,7 +1254,7 @@ async function updateCityData(map, manualCityCode = null) {
 
 function injectLayers(map, geojsonData) {
     if (!isMapStyleReady(map)) {
-        console.warn('[Transit Overlay] Cannot inject layers: map instance is not ready.');
+        scheduleDeferredLayerRefresh();
         return false;
     }
 
@@ -1190,7 +1263,7 @@ function injectLayers(map, geojsonData) {
     } else {
         const source = safeGetSource(map, SOURCE_ID);
         if (!source || !source.setData) {
-            console.warn('[Transit Overlay] Transit source became unavailable; deferring update.');
+            scheduleDeferredLayerRefresh();
             return false;
         }
         source.setData(geojsonData);
