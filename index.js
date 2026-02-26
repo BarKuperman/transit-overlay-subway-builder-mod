@@ -1172,11 +1172,6 @@ api.hooks.onMapReady((map) => {
     ensureHoverInteractions(map);
     map.on('styledata', () => handleStyleDataRefresh(map));
     handleStyleDataRefresh(map);
-    const s = window.RealTransitState;
-    const fallbackCity = s.currentCity || getCurrentCityCode();
-    if (fallbackCity && !s.cache[fallbackCity]) {
-        updateCityData(map, fallbackCity);
-    }
 });
 
 api.hooks.onGameEnd(() => {
@@ -1325,7 +1320,7 @@ function applyNoDataCityState(cityCode, map = null) {
 
 async function updateCityData(map, manualCityCode = null) {
     const s = window.RealTransitState;
-    const cityCode = manualCityCode || window.RealTransitState.currentCity || getCurrentCityCode();
+    const cityCode = manualCityCode || s.currentCity || getCurrentCityCode();
     const getResolvedMap = () => map || api.utils.getMap();
 
     if (!cityCode) {
@@ -1538,14 +1533,9 @@ function updateMapFilters(targetMap = null) {
 }
 
 function getCurrentCityCode() {
-    const map = api.utils.getMap();
-    if (!map) return null;
-    const center = map.getCenter();
-    const cities = api.utils.getCities();
-    const closest = cities.find(c => {
-        const dx = c.initialViewState.longitude - center.lng;
-        const dy = c.initialViewState.latitude - center.lat;
-        return (dx * dx + dy * dy) < 4.0;
-    });
-    return closest ? closest.code : null;
+    const getCityCode = window.SubwayBuilderAPI?.utils?.getCityCode;
+    if (typeof getCityCode === 'function') {
+        return getCityCode();
+    }
+    return null;
 }
