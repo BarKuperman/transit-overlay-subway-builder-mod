@@ -1370,7 +1370,7 @@ async function updateCityData(map, manualCityCode = null) {
     s.inFlightLoads.add(cityCode);
     try {
         let modsDir = await window.electron.getModsFolder();
-        const filePath = `${modsDir}\\Transit Overlay\\data\\${cityCode.toLowerCase()}.geojson`;
+        const filePath = `${modsDir}\\transit-overlay\\data\\${cityCode.toLowerCase()}.geojson`;
         const localFileUrl = `file:///${filePath
             .replaceAll('\\', '/')
             .split('/')
