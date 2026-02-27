@@ -79,6 +79,9 @@ window.RealTransitState = {
     loadRequestSeq: 0,
     uiRegistered: false,
     injectRetryTimer: null,
+    mapLifecycleBound: false,
+    mapLifecycleMapRef: null,
+    styledataHandler: null,
     hover: {
         mode: null,
         lineCandidates: [],
@@ -91,6 +94,7 @@ window.RealTransitState = {
         lastLngLat: null,
         lastPoint: null,
         handlersBound: false,
+        bindingToken: 0,
         keydownHandler: null,
         globalPointerHandler: null,
         mapRef: null
@@ -329,7 +333,6 @@ function clearHoverState(map, shouldRemovePopup = true, force = false) {
     hoverState.lastPoint = null;
     if (shouldRemovePopup && hoverState.popup) hoverState.popup.remove();
     if (hoverState.domTooltip) hoverState.domTooltip.style.display = 'none';
-    if (map && map.getCanvas) map.getCanvas().style.cursor = '';
     clearHoverHighlight(map);
 }
 
@@ -380,7 +383,6 @@ function renderLineHoverPopup(map, lngLat, point) {
 
     setTooltipContentAndPosition(map, lngLat, point, html);
     applyHoverHighlight(map, active.lineId);
-    if (map.getCanvas) map.getCanvas().style.cursor = 'pointer';
 }
 
 function renderStationHoverPopup(map, lngLat, point, stationName, stationLines) {
@@ -435,7 +437,6 @@ function renderStationHoverPopup(map, lngLat, point, stationName, stationLines) 
         </div>
     `;
     setTooltipContentAndPosition(map, lngLat, point, html);
-    if (map.getCanvas) map.getCanvas().style.cursor = 'pointer';
 }
 
 function getStationClusterFeatures(map, event, seedFeature) {
@@ -618,15 +619,53 @@ function onTransitHoverClick(map, event) {
     }
 }
 
-function ensureHoverInteractions(map) {
-    const hoverState = window.RealTransitState.hover;
-    if (!map || hoverState.handlersBound) return;
+function resetHoverWindowBindings() {
+    const s = window.RealTransitState;
+    const hoverState = s && s.hover ? s.hover : null;
+    if (!hoverState) return;
+    if (hoverState.keydownHandler) {
+        window.removeEventListener('keydown', hoverState.keydownHandler);
+        hoverState.keydownHandler = null;
+    }
+    if (hoverState.globalPointerHandler) {
+        window.removeEventListener('pointerdown', hoverState.globalPointerHandler, true);
+        hoverState.globalPointerHandler = null;
+    }
+}
 
-    map.on('mousemove', (event) => onTransitHoverMove(map, event));
-    map.on('click', (event) => onTransitHoverClick(map, event));
-    map.on('mouseout', () => clearHoverState(map));
+function ensureHoverInteractions(map, forceRebind = false) {
+    const hoverState = window.RealTransitState.hover;
+    if (!map) return;
+    if (forceRebind) {
+        resetHoverWindowBindings();
+        hoverState.handlersBound = false;
+    }
+    if (hoverState.handlersBound) return;
+
+    const bindToken = hoverState.bindingToken + 1;
+    hoverState.bindingToken = bindToken;
+
+    map.on('mousemove', (event) => {
+        const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
+        if (!hs || hs.bindingToken !== bindToken) return;
+        onTransitHoverMove(map, event);
+    });
+    map.on('click', (event) => {
+        const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
+        if (!hs || hs.bindingToken !== bindToken) return;
+        onTransitHoverClick(map, event);
+    });
+    map.on('mouseout', () => {
+        const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
+        if (!hs || hs.bindingToken !== bindToken) return;
+        clearHoverState(map);
+    });
     if (map.getCanvas && map.getCanvas()) {
-        map.getCanvas().addEventListener('mouseleave', () => clearHoverState(map));
+        map.getCanvas().addEventListener('mouseleave', () => {
+            const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
+            if (!hs || hs.bindingToken !== bindToken) return;
+            clearHoverState(map);
+        });
     }
 
     hoverState.keydownHandler = onTransitHoverKeydown;
@@ -650,6 +689,42 @@ function ensureHoverInteractions(map) {
     window.addEventListener('pointerdown', hoverState.globalPointerHandler, true);
     hoverState.handlersBound = true;
     hoverState.mapRef = map;
+}
+
+function bootstrapMapRuntime(map, forceRebind = false) {
+    if (!map) return;
+    const s = window.RealTransitState;
+
+    if (s.mapLifecycleMapRef !== map) {
+        s.mapLifecycleBound = false;
+        s.mapLifecycleMapRef = map;
+        s.styledataHandler = null;
+        if (s.hover) {
+            s.hover.handlersBound = false;
+            s.hover.mapRef = null;
+        }
+    }
+    if (forceRebind) {
+        s.mapLifecycleBound = false;
+        s.styledataHandler = null;
+        if (s.hover) {
+            s.hover.handlersBound = false;
+        }
+    }
+
+    ensureHoverInteractions(map, forceRebind);
+
+    if (!s.mapLifecycleBound || !s.styledataHandler) {
+        s.styledataHandler = () => {
+            if (!isActiveModuleInstance()) return;
+            handleStyleDataRefresh(map);
+        };
+        map.on('styledata', s.styledataHandler);
+        s.mapLifecycleBound = true;
+    }
+
+    if (!isActiveModuleInstance()) return;
+    handleStyleDataRefresh(map);
 }
 
 function registerOverlayUiComponent() {
@@ -1157,6 +1232,8 @@ api.hooks.onGameInit(() => {
     // Register component using the custom pattern
     window.RealTransitOverlayComponent = TransitPanel;
     registerOverlayUiComponent();
+    const existingMap = api.utils.getMap();
+    if (existingMap) bootstrapMapRuntime(existingMap, true);
     console.info('[Transit Overlay] Mod initialized.');
 });
 
@@ -1169,33 +1246,19 @@ api.hooks.onCityLoad((cityCode) => {
 
 api.hooks.onMapReady((map) => {
     registerOverlayUiComponent();
-    ensureHoverInteractions(map);
-
-    const resolvedCity = getCurrentCityCode();
-    if (resolvedCity) {
-        window.RealTransitState.currentCity = resolvedCity;
-        updateCityData(map, resolvedCity);
-    } else {
-        applyNoDataCityState(null, map);
-    }
-
-    map.on('styledata', () => handleStyleDataRefresh(map));
-    handleStyleDataRefresh(map);
+    bootstrapMapRuntime(map, true);
 });
 
 api.hooks.onGameEnd(() => {
     const s = window.RealTransitState;
     s.uiRegistered = false;
-    if (s.hover && s.hover.keydownHandler) {
-        window.removeEventListener('keydown', s.hover.keydownHandler);
-        s.hover.keydownHandler = null;
-    }
-    if (s.hover && s.hover.globalPointerHandler) {
-        window.removeEventListener('pointerdown', s.hover.globalPointerHandler, true);
-        s.hover.globalPointerHandler = null;
-    }
+    s.mapLifecycleBound = false;
+    s.mapLifecycleMapRef = null;
+    s.styledataHandler = null;
+    resetHoverWindowBindings();
     if (s.hover) {
         s.hover.handlersBound = false;
+        s.hover.bindingToken += 1;
         s.hover.mapRef = null;
         if (s.hover.popup) s.hover.popup.remove();
         s.hover.popup = null;
