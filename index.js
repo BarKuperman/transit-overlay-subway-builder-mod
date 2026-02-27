@@ -1444,9 +1444,30 @@ async function updateCityData(map, manualCityCode = null) {
     }
 
     s.inFlightLoads.add(cityCode);
+    let filePath = '';
     try {
-        let modsDir = await window.electron.getModsFolder();
-        const filePath = `${modsDir}\\transit-overlay\\data\\${cityCode.toLowerCase()}.geojson`;
+        const modsDir = await window.electron.getModsFolder();
+        const scannedModsResult = await window.electron.scanMods();
+        const scannedModEntries = Array.isArray(scannedModsResult)
+            ? scannedModsResult
+            : (Array.isArray(scannedModsResult?.mods)
+                ? scannedModsResult.mods
+                : (scannedModsResult && typeof scannedModsResult === 'object' ? Object.values(scannedModsResult) : []));
+
+        const transitOverlayMod = scannedModEntries.find((mod) => {
+            if (!mod || typeof mod !== 'object') return false;
+            return String(mod.id || mod?.manifest?.id || '').toLowerCase() === 'com.barku.transit-overlay';
+        }) || null;
+
+        const scannedModPath = transitOverlayMod && transitOverlayMod.path
+            ? transitOverlayMod.path
+            : null;
+        if (!scannedModPath) {
+            console.warn('[Transit Overlay] scanMods() returned no path for this mod; using fallback folder path.');
+        }
+        const modBasePath = scannedModPath || `${modsDir}\\transit-overlay`;
+
+        filePath = `${modBasePath}\\data\\${cityCode.toLowerCase()}.geojson`;
         const localFileUrl = `file:///${filePath
             .replaceAll('\\', '/')
             .split('/')

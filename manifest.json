@@ -1,5 +1,5 @@
 {
-    "id": "transit-overlay",
+    "id": "com.barku.transit-overlay",
     "name": "Transit Overlay",
     "description": "Overlays real-world railway and subway lines from Open Street Map and GTFS data onto the in-game map.",
     "version": "1.4.0",

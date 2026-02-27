@@ -1,4 +1,4 @@
-﻿# Transit Overlay for Subway Builder
+# Transit Overlay for Subway Builder
 
 This mod adds real-world transit data as an interactive overlay to **Subway Builder**, allowing you to visualize actual subway, train, and tram networks while you build your own systems.
 
@@ -7,12 +7,11 @@ This mod adds real-world transit data as an interactive overlay to **Subway Buil
 ## Installation
 
 1. **Extract the Files**: Place the entire folder into your game's `mods` directory.
-2. **Rename the mod folder**: Change the folder name to exactly **"Transit Overlay"**.
-3. **Enable in Mod Manager**:
+2. **Enable in Mod Manager**:
    * Launch the game and open the **Mod Manager**.
    * Locate **Transit Overlay** and toggle it to **ON**.
    * Click **Reload Mods**.
-4. **Required Restart**: Close the game completely after activating the mod for the first time.
+3. **Required Restart**: Close the game completely after activating the mod for the first time.
 
 Expected folder structure:
 ```text
@@ -73,3 +72,5 @@ The mod currently includes transit data for the following cities:
 * **Tel Aviv** (`tlv.geojson`)
 * **Toronto** (`tor.geojson`)
 * **Washington D.C.** (`dc.geojson`)
+
+
