@@ -1170,6 +1170,15 @@ api.hooks.onCityLoad((cityCode) => {
 api.hooks.onMapReady((map) => {
     registerOverlayUiComponent();
     ensureHoverInteractions(map);
+
+    const resolvedCity = getCurrentCityCode();
+    if (resolvedCity) {
+        window.RealTransitState.currentCity = resolvedCity;
+        updateCityData(map, resolvedCity);
+    } else {
+        applyNoDataCityState(null, map);
+    }
+
     map.on('styledata', () => handleStyleDataRefresh(map));
     handleStyleDataRefresh(map);
 });
@@ -1212,12 +1221,21 @@ function ensureTransitLayerOrder(map) {
 function handleStyleDataRefresh(map) {
     try {
         const s = window.RealTransitState;
-        const currentCity = s.currentCity || getCurrentCityCode();
-        if (!currentCity) return;
-        s.currentCity = currentCity;
-        const cachedCityData = s.cache[currentCity];
+        const resolvedCity = getCurrentCityCode() || s.currentCity;
+        if (!resolvedCity) {
+            applyNoDataCityState(null, map);
+            return;
+        }
+
+        if (s.currentCity !== resolvedCity) {
+            s.currentCity = resolvedCity;
+            updateCityData(map, resolvedCity);
+            return;
+        }
+
+        const cachedCityData = s.cache[resolvedCity];
         if (!cachedCityData) {
-            updateCityData(map, currentCity);
+            updateCityData(map, resolvedCity);
             return;
         }
 
