@@ -6,7 +6,7 @@ This mod adds real-world transit data as an interactive overlay to **Subway Buil
 
 ## Installation
 
-1. **Extract the Files**: Place the entire folder into your game's `mods` directory.
+1. **Extract the Files**: Place the entire folder into your game's `mods` directory (you can find the folder in mod manager inside the game settings).
 2. **Enable in Mod Manager**:
    * Launch the game and open the **Mod Manager**.
    * Locate **Transit Overlay** and toggle it to **ON**.
@@ -32,7 +32,7 @@ metro-maker4/
 ## How to Use
 
 ### Controls & Navigation
-Once inside a map, a new **Transit Overlay** button will appear in your bottom bar:
+Once inside a map, a new **Transit Overlay** button will appear in your top bar:
 * **Show Overlay**: Master switch to turn the entire transit layer on or off.
 * **Show Stations**: Toggle for physical station markers.
 * **Line Filters**: Individual checkboxes to show or hide specific lines (e.g., Line 1, RER A, or Central Line).
