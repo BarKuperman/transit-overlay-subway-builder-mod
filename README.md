@@ -6,6 +6,10 @@ This mod adds real-world transit data as an interactive overlay to **Subway Buil
 
 ## Installation
 
+Available on The Railyard(Subway Builder mod manager) - https://subwaybuildermodded.com/railyard/
+
+Or you could install it normaly:
+
 1. **Extract the Files**: Place the entire folder into your game's `mods` directory (you can find the folder in mod manager inside the game settings).
 2. **Enable in Mod Manager**:
    * Launch the game and open the **Mod Manager**.
