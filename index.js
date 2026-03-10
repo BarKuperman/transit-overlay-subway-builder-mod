@@ -1341,6 +1341,7 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
     const topLineByCoord5 = new Map();
     const stationLineIdsByCoord6 = new Map();
     const stationLineIdsByCoord5 = new Map();
+    const defaultBaseOrderByLineId = {};
 
     const toCoordKey = (coord, precision = 6) => {
         if (!Array.isArray(coord) || !Number.isFinite(coord[0]) || !Number.isFinite(coord[1])) return null;
@@ -1380,6 +1381,28 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
         return 1;
     };
     const TYPE_TIER_SPAN = 1000000;
+    // Build deterministic lexical fallback order per line id.
+    {
+        const lineDescriptorsById = new Map();
+        geojsonData.features.forEach((feature) => {
+            const p = feature.properties || {};
+            const displayName = String(p.route_name || 'Unnamed Line');
+            const type = p.type || 'Other';
+            const network = p.network || 'Unknown';
+            const uniqueId = `${type}__${network}__${displayName}`;
+            if (!lineDescriptorsById.has(uniqueId)) {
+                lineDescriptorsById.set(uniqueId, { lineId: uniqueId, routeName: displayName });
+            }
+        });
+        const sortedDescriptors = Array.from(lineDescriptorsById.values()).sort((a, b) => {
+            const byName = naturalSort(a.routeName, b.routeName);
+            if (byName !== 0) return byName;
+            return naturalSort(a.lineId, b.lineId);
+        });
+        sortedDescriptors.forEach((entry, idx) => {
+            defaultBaseOrderByLineId[entry.lineId] = idx;
+        });
+    }
     geojsonData.features.forEach((f, featureIndex) => {
         const p = f.properties || {};
         const displayName = String(p.route_name || 'Unnamed Line');
@@ -1396,8 +1419,10 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
         if (geometryType.includes('LineString')) {
             const explicitOrderRaw = p.draw_order ?? p.line_order ?? p.order;
             const explicitOrder = Number(explicitOrderRaw);
-            const baseOrder = Number.isFinite(explicitOrder) ? explicitOrder : featureIndex;
-            const drawOrder = (typeTier(type) * TYPE_TIER_SPAN) + baseOrder;
+            const lexicalBaseOrder = Number.isFinite(defaultBaseOrderByLineId[uniqueId]) ? defaultBaseOrderByLineId[uniqueId] : featureIndex;
+            const baseOrder = Number.isFinite(explicitOrder) ? explicitOrder : lexicalBaseOrder;
+            // Flip intra-type stacking direction while keeping type tiers unchanged.
+            const drawOrder = (typeTier(type) * TYPE_TIER_SPAN) - baseOrder;
             const resolvedColor = String(p.colour || p.color || '').trim();
             if (resolvedColor) {
                 if (!lineColorMap[uniqueId]) lineColorMap[uniqueId] = resolvedColor;
@@ -1882,6 +1907,9 @@ function getCurrentCityCode() {
     }
     return null;
 }
+
+
+
 
 
 
