@@ -20,6 +20,8 @@ const LAYER_ID_LINES = 'real-transit-lines';
 const LAYER_ID_LINES_HOVER = 'real-transit-lines-hover';
 const LAYER_ID_STATIONS = 'real-transit-stations';
 const SOURCE_ID = 'real-transit-source';
+const STATION_BASE_COLOR_EXPR = ['coalesce', ['get', 'colour'], ['get', 'color'], '#ffffff'];
+const STATION_BASE_STROKE_EXPR = ['coalesce', ['get', 'colour'], ['get', 'color'], '#a855f7'];
 const STATION_CLUSTER_RADIUS_PX = 14;
 const LINE_CANDIDATE_RADIUS_PX = 8;
 const MODULE_INSTANCE_ID = `rt_overlay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -70,6 +72,7 @@ window.RealTransitState = {
     activeLines: [],
     hierarchy: {},
     lineNames: {}, // Stores display names for unique IDs
+    lineColors: {}, // Stores canonical line colors for unique IDs
     currentCity: null,
     overlayOpen: false, // Tracks if the overlay panel is open
     cache: {},
@@ -132,6 +135,13 @@ const getFeatureColor = (feature) => {
     const p = feature && feature.properties ? feature.properties : {};
     return String(p.colour || p.color || '#9ca3af');
 };
+
+const getFeatureDrawOrder = (feature) => {
+    const p = feature && feature.properties ? feature.properties : {};
+    const order = Number(p._mod_line_draw_order);
+    return Number.isFinite(order) ? order : -1;
+};
+
 
 const PANEL_DEFAULT_TOP = 60;
 const PANEL_SIDE_MARGIN = 22;
@@ -515,7 +525,8 @@ function onTransitHoverMove(map, event) {
             stationLinesById.set(lineId, {
                 lineId,
                 routeName: getFeatureRouteName(feature),
-                color: getFeatureColor(feature)
+                color: (s.lineColors && s.lineColors[lineId]) || getFeatureColor(feature),
+                drawOrder: getFeatureDrawOrder(feature)
             });
         });
 
@@ -550,11 +561,14 @@ function onTransitHoverMove(map, event) {
                 routeName: getFeatureRouteName(feature),
                 type: getFeatureType(feature),
                 network: getFeatureNetwork(feature),
-                color: getFeatureColor(feature)
+                color: (s.lineColors && s.lineColors[lineId]) || getFeatureColor(feature),
+                drawOrder: getFeatureDrawOrder(feature)
             });
         });
 
-        const candidates = Array.from(lineCandidatesById.values()).sort((a, b) => {
+        const candidates = Array.from(lineCandidatesById.values());
+        candidates.sort((a, b) => {
+            if (b.drawOrder !== a.drawOrder) return b.drawOrder - a.drawOrder;
             const byName = naturalSort(a.routeName, b.routeName);
             if (byName !== 0) return byName;
             return naturalSort(a.lineId, b.lineId);
@@ -1321,12 +1335,56 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
     const typesSet = new Set();
     const networksSet = new Set();
     const lineNameMap = {};
+    const lineColorMap = {};
+    const lineDrawOrderMap = {};
+    const topLineByCoord6 = new Map();
+    const topLineByCoord5 = new Map();
+    const stationLineIdsByCoord6 = new Map();
+    const stationLineIdsByCoord5 = new Map();
 
-    geojsonData.features.forEach(f => {
+    const toCoordKey = (coord, precision = 6) => {
+        if (!Array.isArray(coord) || !Number.isFinite(coord[0]) || !Number.isFinite(coord[1])) return null;
+        return `${coord[0].toFixed(precision)},${coord[1].toFixed(precision)}`;
+    };
+
+    const setTopLineAtCoord = (coord, order, color, lineId) => {
+        const key6 = toCoordKey(coord, 6);
+        const key5 = toCoordKey(coord, 5);
+        if (key6) {
+            const current = topLineByCoord6.get(key6);
+            if (!current || order >= current.order) topLineByCoord6.set(key6, { order, color, lineId });
+        }
+        if (key5) {
+            const current = topLineByCoord5.get(key5);
+            if (!current || order >= current.order) topLineByCoord5.set(key5, { order, color, lineId });
+        }
+    };
+
+    const addStationLineAtCoord = (coord, lineId) => {
+        const key6 = toCoordKey(coord, 6);
+        const key5 = toCoordKey(coord, 5);
+        if (key6) {
+            if (!stationLineIdsByCoord6.has(key6)) stationLineIdsByCoord6.set(key6, new Set());
+            stationLineIdsByCoord6.get(key6).add(lineId);
+        }
+        if (key5) {
+            if (!stationLineIdsByCoord5.has(key5)) stationLineIdsByCoord5.set(key5, new Set());
+            stationLineIdsByCoord5.get(key5).add(lineId);
+        }
+    };
+
+    const typeTier = (lineTypeRaw) => {
+        const t = String(lineTypeRaw || '').trim().toLowerCase();
+        if (t === 'subway') return 2;
+        if (t === 'commuter rail') return 0;
+        return 1;
+    };
+    const TYPE_TIER_SPAN = 1000000;
+    geojsonData.features.forEach((f, featureIndex) => {
         const p = f.properties || {};
         const displayName = String(p.route_name || 'Unnamed Line');
-        const type = p.type || "Other";
-        const network = p.network || "Unknown";
+        const type = p.type || 'Other';
+        const network = p.network || 'Unknown';
         const geometryType = f.geometry && f.geometry.type ? f.geometry.type : '';
 
         const uniqueId = `${type}__${network}__${displayName}`;
@@ -1334,6 +1392,34 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
         p._mod_line_id = uniqueId;
         f.properties = p;
         lineNameMap[uniqueId] = displayName;
+
+        if (geometryType.includes('LineString')) {
+            const explicitOrderRaw = p.draw_order ?? p.line_order ?? p.order;
+            const explicitOrder = Number(explicitOrderRaw);
+            const baseOrder = Number.isFinite(explicitOrder) ? explicitOrder : featureIndex;
+            const drawOrder = (typeTier(type) * TYPE_TIER_SPAN) + baseOrder;
+            const resolvedColor = String(p.colour || p.color || '').trim();
+            if (resolvedColor) {
+                if (!lineColorMap[uniqueId]) lineColorMap[uniqueId] = resolvedColor;
+                lineDrawOrderMap[uniqueId] = drawOrder;
+
+                if (geometryType === 'LineString' && Array.isArray(f.geometry?.coordinates)) {
+                    f.geometry.coordinates.forEach((coord) => setTopLineAtCoord(coord, drawOrder, resolvedColor, uniqueId));
+                } else if (geometryType === 'MultiLineString' && Array.isArray(f.geometry?.coordinates)) {
+                    f.geometry.coordinates.forEach((lineCoords) => {
+                        if (!Array.isArray(lineCoords)) return;
+                        lineCoords.forEach((coord) => setTopLineAtCoord(coord, drawOrder, resolvedColor, uniqueId));
+                    });
+                }
+            }
+
+            p._mod_line_draw_order = drawOrder;
+            f.properties = p;
+        }
+
+        if (p.is_station) {
+            addStationLineAtCoord(f.geometry && f.geometry.coordinates, uniqueId);
+        }
 
         if (geometryType.includes('LineString') || p.is_station) {
             linesSet.add(uniqueId);
@@ -1343,6 +1429,159 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
             if (!rawHierarchy[type][network]) rawHierarchy[type][network] = new Set();
             rawHierarchy[type][network].add(uniqueId);
         }
+    });
+
+    const allLineSegments = [];
+    const segmentGrid = new Map();
+    const SEGMENT_CELL_SIZE = 0.01;
+
+    const toCell = (value) => Math.floor(value / SEGMENT_CELL_SIZE);
+    const cellKey = (x, y) => `${x},${y}`;
+
+    const addSegmentToGrid = (segmentIndex, ax, ay, bx, by) => {
+        const minX = toCell(Math.min(ax, bx));
+        const maxX = toCell(Math.max(ax, bx));
+        const minY = toCell(Math.min(ay, by));
+        const maxY = toCell(Math.max(ay, by));
+
+        for (let x = minX; x <= maxX; x += 1) {
+            for (let y = minY; y <= maxY; y += 1) {
+                const key = cellKey(x, y);
+                if (!segmentGrid.has(key)) segmentGrid.set(key, []);
+                segmentGrid.get(key).push(segmentIndex);
+            }
+        }
+    };
+
+    const addSegments = (coords, color, order, lineId) => {
+        if (!Array.isArray(coords) || coords.length < 2 || !color) return;
+        for (let i = 0; i < coords.length - 1; i += 1) {
+            const a = coords[i];
+            const b = coords[i + 1];
+            if (!Array.isArray(a) || !Array.isArray(b)) continue;
+            if (!Number.isFinite(a[0]) || !Number.isFinite(a[1]) || !Number.isFinite(b[0]) || !Number.isFinite(b[1])) continue;
+            const segmentIndex = allLineSegments.length;
+            allLineSegments.push({ ax: a[0], ay: a[1], bx: b[0], by: b[1], color, order, lineId });
+            addSegmentToGrid(segmentIndex, a[0], a[1], b[0], b[1]);
+        }
+    };
+
+    geojsonData.features.forEach((f) => {
+        const p = f.properties || {};
+        const geometry = f.geometry || {};
+        const geometryType = geometry.type || '';
+        if (!geometryType.includes('LineString')) return;
+        const color = String(p.colour || p.color || '').trim();
+        if (!color) return;
+        const order = Number.isFinite(p._mod_line_draw_order) ? p._mod_line_draw_order : -1;
+
+        if (geometryType === 'LineString') {
+            addSegments(geometry.coordinates, color, order, p._mod_line_id || null);
+        } else if (geometryType === 'MultiLineString' && Array.isArray(geometry.coordinates)) {
+            geometry.coordinates.forEach((lineCoords) => addSegments(lineCoords, color, order, p._mod_line_id || null));
+        }
+    });
+
+    const pointToSegmentDistanceSq = (px, py, ax, ay, bx, by) => {
+        const abx = bx - ax;
+        const aby = by - ay;
+        const apx = px - ax;
+        const apy = py - ay;
+        const abLenSq = (abx * abx) + (aby * aby);
+        if (abLenSq <= 0) return ((px - ax) ** 2) + ((py - ay) ** 2);
+        let t = ((apx * abx) + (apy * aby)) / abLenSq;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        const cx = ax + (t * abx);
+        const cy = ay + (t * aby);
+        return ((px - cx) ** 2) + ((py - cy) ** 2);
+    };
+
+    const getTopNearestLineAtStation = (stationCoords, allowedLineIds = null) => {
+        const px = Array.isArray(stationCoords) ? stationCoords[0] : NaN;
+        const py = Array.isArray(stationCoords) ? stationCoords[1] : NaN;
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
+
+        const cx = toCell(px);
+        const cy = toCell(py);
+        const candidates = new Set();
+
+        for (let x = cx - 1; x <= cx + 1; x += 1) {
+            for (let y = cy - 1; y <= cy + 1; y += 1) {
+                const bucket = segmentGrid.get(cellKey(x, y));
+                if (!bucket) continue;
+                for (let i = 0; i < bucket.length; i += 1) candidates.add(bucket[i]);
+            }
+        }
+
+        if (candidates.size === 0) return null;
+
+        const SNAP_DIST_DEGREES = 0.0002;
+        const SNAP_DIST_SQ = SNAP_DIST_DEGREES * SNAP_DIST_DEGREES;
+        const nearby = [];
+        let nearest = null;
+        let nearestDist = Number.POSITIVE_INFINITY;
+        candidates.forEach((segmentIndex) => {
+            const s = allLineSegments[segmentIndex];
+            if (allowedLineIds && s.lineId && !allowedLineIds.has(s.lineId)) return;
+            const d = pointToSegmentDistanceSq(px, py, s.ax, s.ay, s.bx, s.by);
+            if (d <= SNAP_DIST_SQ) nearby.push({ s, d });
+            if (!nearest || d < nearestDist || (d === nearestDist && s.order > nearest.order)) {
+                nearestDist = d;
+                nearest = s;
+            }
+        });
+
+        if (nearby.length > 0) {
+            nearby.sort((a, b) => {
+                if (b.s.order !== a.s.order) return b.s.order - a.s.order;
+                return a.d - b.d;
+            });
+            return nearby[0].s;
+        }
+
+        return nearest;
+    };
+
+    // Keep station marker colors aligned with the top-stacked nearest line at that station point.
+    geojsonData.features.forEach((f) => {
+        const p = f.properties || {};
+        if (!p.is_station) return;
+        const lineId = p._mod_line_id;
+        if (!lineId) return;
+
+        const coord6 = toCoordKey(f.geometry && f.geometry.coordinates, 6);
+        const coord5 = toCoordKey(f.geometry && f.geometry.coordinates, 5);
+        const allowedLineIds = (coord6 && stationLineIdsByCoord6.get(coord6)) || (coord5 && stationLineIdsByCoord5.get(coord5)) || new Set([lineId]);
+        const rawTopByCoord = (coord6 && topLineByCoord6.get(coord6)) || (coord5 && topLineByCoord5.get(coord5)) || null;
+        const topByCoord = (rawTopByCoord && rawTopByCoord.lineId && allowedLineIds.has(rawTopByCoord.lineId)) ? rawTopByCoord : null;
+        const topByNearestAny = getTopNearestLineAtStation(f.geometry && f.geometry.coordinates, null);
+        const topByNearest = getTopNearestLineAtStation(f.geometry && f.geometry.coordinates, allowedLineIds);
+
+        const preferredCorridorColor = rawTopByCoord?.color || topByNearestAny?.color || null;
+        let continuityOrder = -1;
+        if (preferredCorridorColor) {
+            allowedLineIds.forEach((allowedId) => {
+                if (String(lineColorMap[allowedId] || '').trim() !== preferredCorridorColor) return;
+                const order = Number.isFinite(lineDrawOrderMap[allowedId]) ? lineDrawOrderMap[allowedId] : -1;
+                if (order > continuityOrder) continuityOrder = order;
+            });
+        }
+        const continuityMatch = continuityOrder >= 0
+            ? { color: preferredCorridorColor, order: continuityOrder }
+            : null;
+
+        const stationColor = continuityMatch?.color || topByCoord?.color || topByNearest?.color || lineColorMap[lineId] || String(p.colour || p.color || '').trim();
+        if (!stationColor) return;
+
+        p.colour = stationColor;
+        p.color = stationColor;
+        p._mod_line_draw_order = continuityMatch
+            ? continuityMatch.order
+            : (topByCoord
+                ? topByCoord.order
+                : (topByNearest ? topByNearest.order : (Number.isFinite(lineDrawOrderMap[lineId]) ? lineDrawOrderMap[lineId] : -1)));
+        f.properties = p;
     });
 
     const formattedHierarchy = {};
@@ -1368,6 +1607,7 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
     const s = window.RealTransitState;
     s.currentCity = cityCode;
     s.lineNames = lineNameMap;
+    s.lineColors = lineColorMap;
     s.hierarchy = formattedHierarchy;
     s.activeLines = healedLines.length > 0 ? healedLines : validLines;
     s.activeTypes = healedTypes.length > 0 ? healedTypes : validTypes;
@@ -1377,12 +1617,12 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
     saveCityStateArray(s, 'active_types', s.activeTypes);
     saveCityStateArray(s, 'active_nets', s.activeNetworks);
 }
-
 function applyNoDataCityState(cityCode, map = null) {
     const s = window.RealTransitState;
     s.currentCity = cityCode;
     s.hierarchy = {};
     s.lineNames = {};
+    s.lineColors = {};
     s.activeLines = [];
     s.activeTypes = [];
     s.activeNetworks = [];
@@ -1540,7 +1780,7 @@ function injectLayers(map, geojsonData) {
             id: LAYER_ID_LINES,
             type: 'line',
             source: SOURCE_ID,
-            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            layout: { 'line-join': 'round', 'line-cap': 'round', 'line-sort-key': ['coalesce', ['get', '_mod_line_draw_order'], 0] },
             paint: { 'line-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#a855f7'], 'line-width': 3.5, 'line-opacity': 0.8 }
         });
     }
@@ -1550,7 +1790,7 @@ function injectLayers(map, geojsonData) {
             id: LAYER_ID_LINES_HOVER,
             type: 'line',
             source: SOURCE_ID,
-            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            layout: { 'line-join': 'round', 'line-cap': 'round', 'line-sort-key': ['coalesce', ['get', '_mod_line_draw_order'], 0] },
             filter: ['==', ['get', '_mod_line_id'], '__NONE__'],
             paint: {
                 'line-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#ffffff'],
@@ -1565,7 +1805,8 @@ function injectLayers(map, geojsonData) {
             id: LAYER_ID_STATIONS,
             type: 'circle',
             source: SOURCE_ID,
-            paint: { 'circle-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#ffffff'], 'circle-radius': 4.5, 'circle-stroke-width': 2, 'circle-stroke-color': ['coalesce', ['get', 'colour'], ['get', 'color'], '#a855f7'] }
+            layout: { 'circle-sort-key': ['coalesce', ['get', '_mod_line_draw_order'], 0] },
+            paint: { 'circle-color': STATION_BASE_COLOR_EXPR, 'circle-radius': 4.5, 'circle-stroke-width': 2, 'circle-stroke-color': STATION_BASE_STROKE_EXPR }
         });
     }
 
@@ -1641,3 +1882,33 @@ function getCurrentCityCode() {
     }
     return null;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
