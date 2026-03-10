@@ -100,7 +100,9 @@ window.RealTransitState = {
         bindingToken: 0,
         keydownHandler: null,
         globalPointerHandler: null,
-        mapRef: null
+        mapRef: null,
+        moveRafId: 0,
+        pendingMoveEvent: null
     }
 };
 
@@ -645,6 +647,11 @@ function resetHoverWindowBindings() {
         window.removeEventListener('pointerdown', hoverState.globalPointerHandler, true);
         hoverState.globalPointerHandler = null;
     }
+    if (hoverState.moveRafId) {
+        window.cancelAnimationFrame(hoverState.moveRafId);
+        hoverState.moveRafId = 0;
+    }
+    hoverState.pendingMoveEvent = null;
 }
 
 function ensureHoverInteractions(map, forceRebind = false) {
@@ -662,7 +669,16 @@ function ensureHoverInteractions(map, forceRebind = false) {
     map.on('mousemove', (event) => {
         const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
         if (!hs || hs.bindingToken !== bindToken) return;
-        onTransitHoverMove(map, event);
+        hs.pendingMoveEvent = event;
+        if (hs.moveRafId) return;
+        hs.moveRafId = window.requestAnimationFrame(() => {
+            const latest = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
+            if (!latest || latest.bindingToken !== bindToken) return;
+            const pendingEvent = latest.pendingMoveEvent;
+            latest.pendingMoveEvent = null;
+            latest.moveRafId = 0;
+            if (pendingEvent) onTransitHoverMove(map, pendingEvent);
+        });
     });
     map.on('click', (event) => {
         const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
@@ -672,12 +688,22 @@ function ensureHoverInteractions(map, forceRebind = false) {
     map.on('mouseout', () => {
         const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
         if (!hs || hs.bindingToken !== bindToken) return;
+        if (hs.moveRafId) {
+            window.cancelAnimationFrame(hs.moveRafId);
+            hs.moveRafId = 0;
+        }
+        hs.pendingMoveEvent = null;
         clearHoverState(map);
     });
     if (map.getCanvas && map.getCanvas()) {
         map.getCanvas().addEventListener('mouseleave', () => {
             const hs = window.RealTransitState && window.RealTransitState.hover ? window.RealTransitState.hover : null;
             if (!hs || hs.bindingToken !== bindToken) return;
+            if (hs.moveRafId) {
+                window.cancelAnimationFrame(hs.moveRafId);
+                hs.moveRafId = 0;
+            }
+            hs.pendingMoveEvent = null;
             clearHoverState(map);
         });
     }
@@ -1522,10 +1548,10 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
         return ((px - cx) ** 2) + ((py - cy) ** 2);
     };
 
-    const getTopNearestLineAtStation = (stationCoords, allowedLineIds = null) => {
+    const getTopNearestLinesAtStation = (stationCoords, allowedLineIds = null) => {
         const px = Array.isArray(stationCoords) ? stationCoords[0] : NaN;
         const py = Array.isArray(stationCoords) ? stationCoords[1] : NaN;
-        if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return { any: null, allowed: null };
 
         const cx = toCell(px);
         const cy = toCell(py);
@@ -1539,35 +1565,53 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
             }
         }
 
-        if (candidates.size === 0) return null;
+        if (candidates.size === 0) return { any: null, allowed: null };
 
         const SNAP_DIST_DEGREES = 0.0002;
         const SNAP_DIST_SQ = SNAP_DIST_DEGREES * SNAP_DIST_DEGREES;
-        const nearby = [];
-        let nearest = null;
-        let nearestDist = Number.POSITIVE_INFINITY;
+        let nearbyAny = null;
+        let nearbyAllowed = null;
+        let nearestAny = null;
+        let nearestAllowed = null;
+
+        const isBetterNearby = (current, segment, distance) => (
+            !current
+            || segment.order > current.segment.order
+            || (segment.order === current.segment.order && distance < current.distance)
+        );
+        const isBetterNearest = (current, segment, distance) => (
+            !current
+            || distance < current.distance
+            || (distance === current.distance && segment.order > current.segment.order)
+        );
+
         candidates.forEach((segmentIndex) => {
             const s = allLineSegments[segmentIndex];
-            if (allowedLineIds && s.lineId && !allowedLineIds.has(s.lineId)) return;
             const d = pointToSegmentDistanceSq(px, py, s.ax, s.ay, s.bx, s.by);
-            if (d <= SNAP_DIST_SQ) nearby.push({ s, d });
-            if (!nearest || d < nearestDist || (d === nearestDist && s.order > nearest.order)) {
-                nearestDist = d;
-                nearest = s;
+            const isAllowed = !allowedLineIds || !s.lineId || allowedLineIds.has(s.lineId);
+
+            if (d <= SNAP_DIST_SQ && isBetterNearby(nearbyAny, s, d)) {
+                nearbyAny = { segment: s, distance: d };
+            }
+            if (isBetterNearest(nearestAny, s, d)) {
+                nearestAny = { segment: s, distance: d };
+            }
+
+            if (isAllowed) {
+                if (d <= SNAP_DIST_SQ && isBetterNearby(nearbyAllowed, s, d)) {
+                    nearbyAllowed = { segment: s, distance: d };
+                }
+                if (isBetterNearest(nearestAllowed, s, d)) {
+                    nearestAllowed = { segment: s, distance: d };
+                }
             }
         });
 
-        if (nearby.length > 0) {
-            nearby.sort((a, b) => {
-                if (b.s.order !== a.s.order) return b.s.order - a.s.order;
-                return a.d - b.d;
-            });
-            return nearby[0].s;
-        }
-
-        return nearest;
+        return {
+            any: (nearbyAny ? nearbyAny.segment : (nearestAny ? nearestAny.segment : null)),
+            allowed: (nearbyAllowed ? nearbyAllowed.segment : (nearestAllowed ? nearestAllowed.segment : null))
+        };
     };
-
     // Keep station marker colors aligned with the top-stacked nearest line at that station point.
     geojsonData.features.forEach((f) => {
         const p = f.properties || {};
@@ -1580,8 +1624,9 @@ function hydrateCityStateFromGeoJson(cityCode, geojsonData) {
         const allowedLineIds = (coord6 && stationLineIdsByCoord6.get(coord6)) || (coord5 && stationLineIdsByCoord5.get(coord5)) || new Set([lineId]);
         const rawTopByCoord = (coord6 && topLineByCoord6.get(coord6)) || (coord5 && topLineByCoord5.get(coord5)) || null;
         const topByCoord = (rawTopByCoord && rawTopByCoord.lineId && allowedLineIds.has(rawTopByCoord.lineId)) ? rawTopByCoord : null;
-        const topByNearestAny = getTopNearestLineAtStation(f.geometry && f.geometry.coordinates, null);
-        const topByNearest = getTopNearestLineAtStation(f.geometry && f.geometry.coordinates, allowedLineIds);
+        const nearestInfo = getTopNearestLinesAtStation(f.geometry && f.geometry.coordinates, allowedLineIds);
+        const topByNearestAny = nearestInfo.any;
+        const topByNearest = nearestInfo.allowed;
 
         const preferredCorridorColor = rawTopByCoord?.color || topByNearestAny?.color || null;
         let continuityOrder = -1;
@@ -1907,6 +1952,11 @@ function getCurrentCityCode() {
     }
     return null;
 }
+
+
+
+
+
 
 
 
