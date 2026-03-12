@@ -70,6 +70,7 @@ The mod currently includes transit data for the following cities:
 * **Houston** (`hou.geojson`)
 * **Jerusalem** (`jer.geojson`)
 * **London** (`lon.geojson`)
+* **Manchester** (`man.geojson`)
 * **Miami** (`mia.geojson`)
 * **Montreal** (`mon.geojson`)
 * **Minneapolis** (`msp.geojson`)
