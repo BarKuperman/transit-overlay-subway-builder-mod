@@ -3,3 +3,4 @@ dev_scripts/
 *-raw-osm.json
 *.py
 data_raw/
+.codex/
