@@ -815,7 +815,7 @@ function saveCityStateArray(s, suffix, value) {
     safeSaveArray(`rt_${suffix}_${s.currentCity}`, value);
 }
 
-api.hooks.onGameInit(() => {
+api.hooks.onGameLoaded(() => {
 
     const { React, components, icons } = api.utils;
     const { Button, Card, CardContent, Switch, Label } = components;
