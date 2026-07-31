@@ -70,10 +70,12 @@ The mod currently includes transit data for the following cities:
 * **Houston** (`hou.geojson`)
 * **Jerusalem** (`jer.geojson`)
 * **London** (`lon.geojson`)
+* **Los Angeles** (`la.geojson`)
 * **Manchester** (`man.geojson`)
 * **Miami** (`mia.geojson`)
 * **Montreal** (`yul.geojson`)
 * **Minneapolis** (`msp.geojson`)
+* **New Orleanes** (`no.geojson`)
 * **New York City** (`nyc.geojson`)
 * **Paris** (`par.geojson`)
 * **Portland, Oregon** (`pdx.geojson`)
@@ -87,5 +89,3 @@ The mod currently includes transit data for the following cities:
 * **St. Louis** (`stl.geojson`)
 * **Tel Aviv** (`tlv.geojson`)
 * **Toronto** (`yyz.geojson`)
-
-
