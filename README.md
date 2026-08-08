@@ -65,6 +65,7 @@ The mod currently includes transit data for the following cities:
 * **Washington D.C.** (`dc.geojson`)
 * **Denver** (`den.geojson`)
 * **Detroit** (`det.geojson`)
+* **Dublin** (`dub.geojson`)
 * **Hong Kong** (`hkg.geojson`)
 * **Honolulu** (`hnl.geojson`)
 * **Houston** (`hou.geojson`)
