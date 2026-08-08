@@ -6,9 +6,9 @@ This mod adds real-world transit data as an interactive overlay to **Subway Buil
 
 ## Installation
 
-Available on The Railyard(Subway Builder mod manager) - https://subwaybuildermodded.com/railyard/
+Available on Railyard - https://subwaybuildermodded.com/registry/mods/transit-overlay
 
-Or you could install it normaly:
+Or you could install it manually:
 
 1. **Extract the Files**: Place the entire folder into your game's `mods` directory (you can find the folder in mod manager inside the game settings).
 2. **Enable in Mod Manager**:
@@ -18,6 +18,7 @@ Or you could install it normaly:
 3. **Required Restart**: Close the game completely after activating the mod for the first time.
 
 Expected folder structure:
+
 ```text
 metro-maker4/
 └─ mods/
@@ -73,6 +74,7 @@ The mod currently includes transit data for the following cities:
 * **London** (`lon.geojson`)
 * **Los Angeles** (`la.geojson`)
 * **Lyon** (`lyo.geojson`)
+* **Marseille** (`mar.geojson`)
 * **Manchester** (`man.geojson`)
 * **Miami** (`mia.geojson`)
 * **Montreal** (`yul.geojson`)
