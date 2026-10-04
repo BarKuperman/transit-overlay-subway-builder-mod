@@ -89,6 +89,7 @@ The mod currently includes transit data for the following cities:
 * **San Diego** (`san.geojson`)
 * **San Francisco Bay Area** (`sf.geojson`)
 * **Seattle** (`sea.geojson`)
+* **Singapore** (`sin.geojson`)
 * **Salt Lake City** (`slc.geojson`)
 * **St. Louis** (`stl.geojson`)
 * **Tel Aviv** (`tlv.geojson`)
